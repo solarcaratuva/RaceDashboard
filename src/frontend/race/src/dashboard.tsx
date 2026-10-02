@@ -3,22 +3,87 @@ import { socket } from './util/socket';
 import Dashboard from './components/DashboardCard/Dashboard';
 import RawDataPanel from './components/RawDataPanel/RawDataPanel';
 import type { PrimaryInfo, BPS, Motor, Heartbeat, ConnectionInfo, Fault } from './components/DashboardCard/Dashboard';
+import type {
+  CanDashboardGroups,
+  CanGroupName,
+  CanMessageSignals,
+  CanSignalValue,
+  SocPoint,
+} from './components/CanSignalGroups/CanSignalGroups';
 
 export type BackendSource = 'cloud' | 'xbee' | 'legacy' | 'unknown';
 
+/** Shape stored for the raw Backend Stream panel independently of card state. */
 type RawStreamEntry = {
   id: string;
   source: BackendSource;
   timestamp: number;
   rawData: string;
   messageName: string | null;
-  signals: Record<string, any> | null;
-  original: any;
+  signals: Record<string, unknown> | null;
+  original: unknown;
 };
 
+type StreamRecord = Record<string, unknown>;
+
+/** Narrow untrusted Socket.IO JSON objects before reading their properties. */
+function isStreamRecord(value: unknown): value is StreamRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Accept only JSON primitives that the shared DBC signal renderer supports. */
+function isCanSignalRecord(value: unknown): value is Record<string, CanSignalValue> {
+  return isStreamRecord(value)
+    && Object.values(value).every((signal) =>
+      signal === null
+      || typeof signal === 'string'
+      || typeof signal === 'number'
+      || typeof signal === 'boolean',
+    );
+}
+
+/** Read typed legacy values without permitting strings/objects to become metrics. */
+function numberField(record: StreamRecord, key: string): number {
+  const value = record[key];
+  return typeof value === 'number' ? value : 0;
+}
+
+/** Read a strict boolean field from a legacy payload. */
+function booleanField(record: StreamRecord, key: string): boolean {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : false;
+}
+
+/** Read a strict string field from a legacy payload with an explicit fallback. */
+function stringField(record: StreamRecord, key: string, fallback: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : fallback;
+}
+
+/**
+ * Map each loaded DBC message family into an existing dashboard area.
+ * Unrecognized messages intentionally fall through to diagnostics so decoded
+ * fields remain visible rather than being silently dropped.
+ */
+function groupForMessage(messageName: string): CanGroupName {
+  if (['AuxBatteryStatus', 'MotorCommands', 'DashboardCommands', 'OdometryData'].includes(messageName)) {
+    return 'primary';
+  }
+  if (
+    messageName.startsWith('Bps')
+    || /^MG[01](Status|OutputVoltageInputPower|PCBMOSFETTemperature)$/.test(messageName)
+  ) {
+    return 'bps';
+  }
+  if (messageName.startsWith('MotorController')) {
+    return 'motor';
+  }
+  return 'diagnostics';
+}
+
 const DashboardWrapper = () => {
-  // App-level shared dashboard state for realtime backend streams.
-  // The socket listener below updates this state for both legacy and new stream sources.
+  // Shared state for the legacy dashboard cards; kept for sources that still
+  // emit normalized battery/motor payloads instead of DBC-decoded CAN frames.
   const [primaryInfo, setPrimaryInfo] = useState<PrimaryInfo>({
     speed: 0,
     soc: 0,
@@ -78,40 +143,101 @@ const DashboardWrapper = () => {
   const [faults] = useState<Fault[]>([]);
   const [backendSource, setBackendSource] = useState<BackendSource>('unknown');
   const [streamHistory, setStreamHistory] = useState<RawStreamEntry[]>([]);
+  // Keep one latest frame per message for the cards; the raw panel separately
+  // retains a bounded event history to show recent individual frames.
+  const [canMessages, setCanMessages] = useState<CanMessageSignals[]>([]);
+  // Preserve a recent sequence of SoC samples for plotting instead of keeping
+  // only the latest BpsStatus value.
+  const [socHistory, setSocHistory] = useState<SocPoint[]>([]);
+  // Derive card groups from the latest message state so routing stays centralized.
+  const canData = canMessages.reduce<CanDashboardGroups>((groups, message) => {
+    groups[groupForMessage(message.messageName)].push(message);
+    return groups;
+  }, { primary: [], bps: [], motor: [], diagnostics: [] });
 
   useEffect(() => {
     // Listen for the unified backend stream event and preserve compatibility
     // with the old `pull_db` event name until the backend is fully migrated.
-    const handleStream = (data: any) => {
+    const handleStream = (data: unknown) => {
       if (!Array.isArray(data)) {
         return;
       }
 
-      if (data.length === 0) {
+      const items: unknown[] = data;
+      if (items.length === 0) {
         return;
       }
 
-      const firstItem = data[0];
-      const source: BackendSource = firstItem?.source === 'xbee'
+      const firstItem = items[0];
+      // Detect the event format from its first record. The backend emits a
+      // homogeneous batch, so this determines which parser handles the batch.
+      const source: BackendSource = isStreamRecord(firstItem) && firstItem.source === 'xbee'
         ? 'xbee'
-        : firstItem?.source === 'cloud'
+        : isStreamRecord(firstItem) && firstItem.source === 'cloud'
         ? 'cloud'
-        : firstItem?.payload
+        : isStreamRecord(firstItem) && isStreamRecord(firstItem.payload)
         ? 'legacy'
         : 'unknown';
       setBackendSource(source);
 
       if (source === 'xbee') {
-        const entries = data.map((item: any) => ({
-          id: item.messageId ?? '',
-          source: 'xbee' as BackendSource,
-          timestamp: item.timestamp ?? Date.now(),
-          rawData: item.rawData ?? '',
-          messageName: item.messageName ?? null,
-          signals: item.signals ?? null,
-          original: item,
-        }));
+        // Preserve the original frame and raw bytes for the Backend Stream panel.
+        const entries = items.flatMap((item): RawStreamEntry[] => {
+          if (!isStreamRecord(item)) {
+            return [];
+          }
+          return [{
+            id: stringField(item, 'messageId', ''),
+            source: 'xbee',
+            timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now() / 1000,
+            rawData: stringField(item, 'rawData', ''),
+            messageName: typeof item.messageName === 'string' ? item.messageName : null,
+            signals: isStreamRecord(item.signals) ? item.signals : null,
+            original: item,
+          }];
+        });
         setStreamHistory((prev) => [...entries, ...prev].slice(0, 20));
+
+        // Filter out undecoded or malformed records before passing data into
+        // the dashboard cards, which rely on message names and signal objects.
+        const decodedMessages: CanMessageSignals[] = items.flatMap((value) => {
+          if (!isStreamRecord(value) || !isCanSignalRecord(value.signals)) {
+            return [];
+          }
+          if (typeof value.messageId !== 'string' || typeof value.messageName !== 'string') {
+            return [];
+          }
+          return [{
+            id: value.messageId,
+            messageName: value.messageName,
+            timestamp: typeof value.timestamp === 'number' ? value.timestamp : Date.now() / 1000,
+            signals: value.signals,
+          }];
+        });
+
+        // Messages recur throughout a live stream. Replacing by ID + DBC name
+        // makes each card show the latest signal values for each message type.
+        setCanMessages((previous) => {
+          const messagesById = new Map(
+            previous.map((message) => [`${message.id}-${message.messageName}`, message]),
+          );
+          decodedMessages.forEach((message) => {
+            messagesById.set(`${message.id}-${message.messageName}`, message);
+          });
+          return Array.from(messagesById.values());
+        });
+
+        // The graph uses the BPS DBC's physical pack_soc value and its replay
+        // timestamp; unrelated signals/messages do not create chart points.
+        const socSamples = decodedMessages.flatMap((message) => {
+          const soc = message.signals.pack_soc;
+          return message.messageName === 'BpsStatus' && typeof soc === 'number'
+            ? [{ timestamp: message.timestamp, soc }]
+            : [];
+        });
+        if (socSamples.length > 0) {
+          setSocHistory((previous) => [...previous, ...socSamples].slice(-200));
+        }
         return;
       }
 
@@ -119,57 +245,61 @@ const DashboardWrapper = () => {
         // Legacy `pull_db` payloads are expected to include `struct_name`, so
         // map those records into the same dashboard updates used by the new stream.
         const entries: RawStreamEntry[] = [];
-        data.forEach((item: any) => {
+        items.forEach((value) => {
+          if (!isStreamRecord(value)) {
+            return;
+          }
+          const item = value;
           const raw = item.payload;
-          if (!raw) {
+          if (!isStreamRecord(raw)) {
             return;
           }
 
           const structName = raw.struct_name;
           if (structName === 'motor') {
             setMotor({
-              batteryVoltage: raw.battery_voltage_mc ?? 0,
-              batteryCurrent: raw.battery_current_mc ?? 0,
-              motorCurrent: raw.motor_current ?? 0,
-              motorRpm: raw.motor_rpm ?? 0,
-              fetTemp: raw.fet_temp ?? 0,
-              pwmDuty: raw.pwm_duty ?? 0,
-              acceleratorPosition: raw.accel_position ?? 0,
-              regenPosition: raw.regen_position ?? 0,
-              powerMode: raw.power_mode ?? 'STANDBY',
-              controlMode: raw.control_mode ?? 'TORQUE',
-              regenEnabled: raw.regen ?? false,
+              batteryVoltage: numberField(raw, 'battery_voltage_mc'),
+              batteryCurrent: numberField(raw, 'battery_current_mc'),
+              motorCurrent: numberField(raw, 'motor_current'),
+              motorRpm: numberField(raw, 'motor_rpm'),
+              fetTemp: numberField(raw, 'fet_temp'),
+              pwmDuty: numberField(raw, 'pwm_duty'),
+              acceleratorPosition: numberField(raw, 'accel_position'),
+              regenPosition: numberField(raw, 'regen_position'),
+              powerMode: stringField(raw, 'power_mode', 'STANDBY'),
+              controlMode: stringField(raw, 'control_mode', 'TORQUE'),
+              regenEnabled: booleanField(raw, 'regen'),
             });
           }
 
           if (structName === 'battery') {
             const parsedBps: BPS = {
-              packVoltage: raw.pack_voltage ?? 0,
-              packCurrent: raw.pack_current ?? 0,
-              soc: raw.pack_soc ?? 0,
-              dischargeRelayClosed: raw.discharge_relay ?? false,
-              chargeRelayClosed: raw.charge_relay ?? false,
-              chargerSafety: raw.charger_safety ?? false,
-              chargePowerSignal: raw.charge_power_signal ?? false,
-              balancingActive: raw.balancing ?? false,
+              packVoltage: numberField(raw, 'pack_voltage'),
+              packCurrent: numberField(raw, 'pack_current'),
+              soc: numberField(raw, 'pack_soc'),
+              dischargeRelayClosed: booleanField(raw, 'discharge_relay'),
+              chargeRelayClosed: booleanField(raw, 'charge_relay'),
+              chargerSafety: booleanField(raw, 'charger_safety'),
+              chargePowerSignal: booleanField(raw, 'charge_power_signal'),
+              balancingActive: booleanField(raw, 'balancing'),
             };
             setBps(parsedBps);
             setPrimaryInfo({
-              speed: raw.speed ?? 0,
-              soc: raw.pack_soc ?? 0,
-              power_in: raw.solar_power_in ?? 0,
-              net_power: raw.net_pack_power ?? 0,
-              batt_curr: raw.batt_current ?? 0,
-              batt_volt: raw.batt_voltage ?? 0,
+              speed: numberField(raw, 'speed'),
+              soc: numberField(raw, 'pack_soc'),
+              power_in: numberField(raw, 'solar_power_in'),
+              net_power: numberField(raw, 'net_pack_power'),
+              batt_curr: numberField(raw, 'batt_current'),
+              batt_volt: numberField(raw, 'batt_voltage'),
             });
           }
 
           entries.push({
-            id: raw?.id ?? raw?.message_id ?? '',
+            id: stringField(raw, 'id', stringField(raw, 'message_id', '')),
             source: 'legacy',
             timestamp: Date.now(),
             rawData: JSON.stringify(raw, null, 2),
-            messageName: structName ?? null,
+            messageName: typeof structName === 'string' ? structName : null,
             signals: raw,
             original: raw,
           });
@@ -179,15 +309,20 @@ const DashboardWrapper = () => {
       }
 
       if (source === 'cloud') {
-        const entries = data.map((item: any) => ({
-          id: item.id ?? item.message_id ?? '',
-          source: 'cloud' as BackendSource,
-          timestamp: Date.now(),
-          rawData: JSON.stringify(item, null, 2),
-          messageName: item.struct_name ?? null,
-          signals: item,
-          original: item,
-        }));
+        const entries = items.flatMap((item): RawStreamEntry[] => {
+          if (!isStreamRecord(item)) {
+            return [];
+          }
+          return [{
+            id: stringField(item, 'id', stringField(item, 'message_id', '')),
+            source: 'cloud',
+            timestamp: Date.now(),
+            rawData: JSON.stringify(item, null, 2),
+            messageName: typeof item.struct_name === 'string' ? item.struct_name : null,
+            signals: item,
+            original: item,
+          }];
+        });
         setStreamHistory((prev) => [...entries, ...prev].slice(0, 20));
       }
     };
@@ -203,6 +338,8 @@ const DashboardWrapper = () => {
 
   return (
     <>
+      {/* Undefined preserves the existing legacy component rendering path;
+          an empty group object marks XBee mode before any frames arrive. */}
       <Dashboard
         primaryInfo={primaryInfo}
         bps={bps}
@@ -211,6 +348,8 @@ const DashboardWrapper = () => {
         xbee={xbee}
         lte={lte}
         faults={faults}
+        canData={backendSource === 'xbee' ? canData : undefined}
+        socHistory={backendSource === 'xbee' ? socHistory : undefined}
         streamPanel={<RawDataPanel backendSource={backendSource} entries={streamHistory} />}
       />
     </>

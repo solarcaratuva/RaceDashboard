@@ -1,5 +1,8 @@
 import "./BpsCard.css";
+import CanSignalGroups from "../CanSignalGroups/CanSignalGroups";
+import type { CanMessageSignals } from "../CanSignalGroups/CanSignalGroups";
 
+/** Existing normalized battery fields used by legacy payloads. */
 type Bps = {
     packVoltage: number;
     packCurrent: number;
@@ -13,13 +16,21 @@ type Bps = {
 
 type BpsCardProps = {
     bps: Bps;
+    /** BPS and MPPT DBC frames when the active backend stream is XBee. */
+    canMessages?: CanMessageSignals[];
 }
 
-export default function BpsCard({ bps }: BpsCardProps) {
+export default function BpsCard({ bps, canMessages }: BpsCardProps) {
   return (
     <div className="secondary-block">
         <h4 className="block-label">BPS</h4>
 
+        {/* The XBee branch shows every decoded BPS/MPPT signal; the legacy branch
+            keeps its established units and field labels. */}
+        {canMessages !== undefined ? (
+          <CanSignalGroups messages={canMessages} />
+        ) : (
+          <>
         <div className="secondary-row">
           <span>Pack Voltage</span>
           <span className="secondary-value">
@@ -75,6 +86,8 @@ export default function BpsCard({ bps }: BpsCardProps) {
               {String(bps?.balancingActive ?? false)}
           </span>
         </div>
+          </>
+        )}
     </div>
   );
 }

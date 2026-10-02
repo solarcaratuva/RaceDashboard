@@ -7,8 +7,9 @@ import MotorCard from "../MotorCard/MotorCard"
 import DiagnosticsCard from "../DiagnosticsCard/DiagnosticsCard"
 import BpsSocGraphCard from "../BpsSocGraphCard/BpsSocGraphCard";
 import ApiStatusCard from "../ApiStatusCard/ApiStatusCard";
+import type { CanDashboardGroups, SocPoint } from "../CanSignalGroups/CanSignalGroups";
 
-// Type definitions
+/** Normalized field shapes used by the legacy data-source components. */
 export type PrimaryInfo = {
   speed: number;
   soc: number;
@@ -74,8 +75,17 @@ export type DashboardProps = {
   lte: ConnectionInfo;
   faults: Fault[];
   streamPanel?: ReactNode;
+  /** Supplied only for XBee mode; each group is rendered inside its existing card. */
+  canData?: CanDashboardGroups;
+  /** Actual BpsStatus samples; the graph has no mock fallback. */
+  socHistory?: SocPoint[];
 }
 
+/**
+ * Compose the dashboard and route each data family into its existing card.
+ * Optional CAN groups select the DBC-driven rendering path within each card;
+ * they do not create a second CAN-message card.
+ */
 const Dashboard = ({ 
   primaryInfo, 
   bps, 
@@ -85,6 +95,8 @@ const Dashboard = ({
   lte, 
   faults,
   streamPanel,
+  canData,
+  socHistory,
 }: DashboardProps) => {
   return (
     <div className="app-container">
@@ -95,10 +107,12 @@ const Dashboard = ({
       <div className="dashboard-columns">
         {/* Left column */}
         <div className="dashboard-left">
-          <PrimaryInfoCard primaryInfo={primaryInfo}/>
+          {/* Primary CAN fields include vehicle summary, driver commands, and odometry. */}
+          <PrimaryInfoCard primaryInfo={primaryInfo} canMessages={canData?.primary}/>
           <div className="secondary-info">
-            <BpsCard bps={bps}/>
-            <MotorCard motor={motor}/>
+            {/* BPS owns pack/MPPT messages; Motor owns controller messages. */}
+            <BpsCard bps={bps} canMessages={canData?.bps}/>
+            <MotorCard motor={motor} canMessages={canData?.motor}/>
           </div>
 
           {streamPanel ? (
@@ -117,16 +131,15 @@ const Dashboard = ({
         {/* Right column */}
         <div className="dashboard-right">
           <ApiStatusCard apiUrl="/api/test" />
-          
           <DiagnosticsCard
             heartbeat={heartbeat}
             xbee={xbee}
             lte={lte}
             faults={faults}
+            canMessages={canData?.diagnostics}
           />
-
-          <BpsSocGraphCard />
-
+          {/* The chart is driven by BpsStatus samples while XBee mode is active. */}
+          <BpsSocGraphCard data={socHistory}/>
         </div>
       </div>
     </div>

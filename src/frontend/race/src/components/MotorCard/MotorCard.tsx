@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
 import "./MotorCard.css";
+import CanSignalGroups from "../CanSignalGroups/CanSignalGroups";
+import type { CanMessageSignals } from "../CanSignalGroups/CanSignalGroups";
 
+/** Legacy motor properties are kept for the non-XBee dashboard path. */
 type Motor = {
     batteryVoltage: number;
     batteryCurrent: number;
@@ -17,13 +19,21 @@ type Motor = {
 
 type MotorCardProps = {
   motor: Motor;
+  /** Motor-controller DBC frames received through the XBee stream. */
+  canMessages?: CanMessageSignals[];
 }
 
-export default function MotorCard({motor} : MotorCardProps) {
+export default function MotorCard({motor, canMessages} : MotorCardProps) {
   return (
     <div className="secondary-block">
         <h4 className="block-label">Motor</h4>
 
+        {/* Render all motor-controller messages in XBee mode, including controller
+            status/error signals that did not have fields in the legacy Motor type. */}
+        {canMessages !== undefined ? (
+          <CanSignalGroups messages={canMessages} />
+        ) : (
+          <>
         <div className="secondary-row">
           <span>Motor RPM</span>
           <span className="secondary-value">
@@ -100,6 +110,8 @@ export default function MotorCard({motor} : MotorCardProps) {
               {String(motor?.regenEnabled ?? false)}
           </span>
         </div>
+          </>
+        )}
     </div>
   );
 }

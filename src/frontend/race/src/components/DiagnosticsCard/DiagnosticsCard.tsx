@@ -1,5 +1,7 @@
 import './DiagnosticsCard.css'
 import ConnectionRow from '../TransmissionStatusCard/TransmissionStatusCard';
+import CanSignalGroups from '../CanSignalGroups/CanSignalGroups';
+import type { CanMessageSignals } from '../CanSignalGroups/CanSignalGroups';
 
 type HeartbeatProps = {
     wheel: boolean;
@@ -7,6 +9,7 @@ type HeartbeatProps = {
     telemetry: boolean;
 }
 
+/** Transport metrics retained for XBee/LTE connection status rows. */
 type ConnectionProps = {
     name: string;
     lastMs: number;
@@ -15,6 +18,7 @@ type ConnectionProps = {
     isOnline: boolean;
 }
 
+/** Legacy fault shape retained for non-XBee status payloads. */
 type FaultProps = {
     id: number;
     source: string;
@@ -28,9 +32,12 @@ type DiagnosticProps = {
     xbee?: ConnectionProps,
     lte?: ConnectionProps,
     faults?: FaultProps,
+    /** DBC frames not assigned to the primary, BPS/MPPT, or motor cards. */
+    canMessages?: CanMessageSignals[],
 }
 
-export default function DiagnosticsCard({ heartbeat, xbee, lte, faults }: DiagnosticProps) {
+export default function DiagnosticsCard({ heartbeat, xbee, lte, faults, canMessages }: DiagnosticProps) {
+    // Keep safe defaults for callers that do not yet supply the legacy diagnostics props.
     const safeHeartbeat = heartbeat ?? { wheel: false, power: false, telemetry: false };
     const safeXbee = xbee ?? { name: 'XBee', lastMs: 0, bytesPerSec: 0, isPrimary: true, isOnline: false };
     const safeLte = lte ?? { name: 'LTE', lastMs: 0, bytesPerSec: 0, isPrimary: false, isOnline: false };
@@ -49,6 +56,18 @@ export default function DiagnosticsCard({ heartbeat, xbee, lte, faults }: Diagno
                 <ConnectionRow label="LTE" status={safeLte} />
             </div>
 
+            {/* Connection health remains useful in either data mode. Only the
+                vehicle-data portion switches between decoded DBC and legacy fields. */}
+            {canMessages !== undefined ? (
+                <>
+                    <hr className="card-separator" />
+                    <h4 className="sub-label">Vehicle Status & Telemetry</h4>
+                    <CanSignalGroups messages={canMessages} />
+                </>
+            ) : (
+                <>
+            {/* These indicators and synthesized fault rows belong to the older
+                payload format; XBee DBC signals are rendered directly above. */}
             <hr className="card-separator" />
             <h4 className="sub-label">Heartbeat Status</h4>
             <div className="heartbeat-section">
@@ -108,6 +127,8 @@ export default function DiagnosticsCard({ heartbeat, xbee, lte, faults }: Diagno
                     ))
                 )}
             </div>
+                </>
+            )}
         </div>
     )
 }
