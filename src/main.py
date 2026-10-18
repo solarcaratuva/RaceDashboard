@@ -145,6 +145,8 @@ def run_server(args):
     elif args.logType == "radio":
         socketio.start_background_task(target=consumer.process_data_live)
         socketio.start_background_task(target=radio_producer.listen_to_radio)
+        print("made it out the trenches")
+
 
     elif args.logType == "cloud":
         print("CLOUD DATA TYPE SELECTED")

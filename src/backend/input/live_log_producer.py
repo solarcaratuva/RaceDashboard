@@ -1,4 +1,5 @@
 import time
+from typing import Optional
 from serial import Serial
 import serial.tools.list_ports
 from backend.input.logfile_producer import parse_line
@@ -6,7 +7,7 @@ from backend.sockio.stream_xbee import enqueue_xbee_message
 import backend.input.consumer as consumer
 
 
-def get_correct_port() -> str:
+def get_correct_port() -> Optional[str]:
     """ Finds the ST-Link's port"""
 
     ports = serial.tools.list_ports.comports()

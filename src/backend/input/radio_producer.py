@@ -1,9 +1,8 @@
-from serial import Serial
-import serial.tools.list_ports
-# import re
 import time
+from serial import Serial
 from .logfile_producer import parse_line
 from ..sockio.stream_xbee import enqueue_xbee_message
+from ..startup_validation import get_radio_port
 from . import consumer
 
 # Radio message pattern
@@ -23,46 +22,55 @@ def parse_radio_line(line: str) -> tuple[int, bytes] | None:
     id_int, data_bytes, _timestamp = parsed
     return (id_int, data_bytes)
 
-
-def get_correct_port() -> str | None:
-    """ Finds the radio's port"""
-
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if "usb serial port" in port.description.lower():
-            return port.device
-    return None
-
-
 def listen_to_radio():
     """ Listens to the radio for CAN messages and adds them to the queue. Runs forever"""
 
-    port = get_correct_port()
+    print("Will attempt to get port", flush=True)
+
+    try:
+        port = get_radio_port()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+    print(f"get_radio_port() returned: {port!r}", flush=True)
     if port is None:
-        print("ERROR: radio not found.")
+        print("ERROR: radio not found.", flush=True)
         return
+    else:
+        print(f"This is the port {port}", flush=True)
 
     try:
         ser = Serial(port, baudrate=9600)
-        print(f"Serial connection to {port} established. Listening...")
+        print(f"Serial connection to {port} established. Listening...", flush=True)
 
         while True:
             try:
-                text = ser.readline().decode("utf-8").strip()
+                print("Waiting for serial data...", flush=True)
+                raw_line = ser.readline()
+                print(f"Received {len(raw_line)} bytes from serial port", flush=True)
+                text = raw_line.decode("utf-8").strip()
+                print(f"Decoded serial line: {text!r}", flush=True)
                 if text is None:
+                    print("Decoded text is None; skipping line", flush=True)
                     continue
                 text_tuple = parse_radio_line(text)
+                print(f"Parsed radio line: {text_tuple!r}", flush=True)
                 if text_tuple is None:
+                    print("Line did not match a radio message; skipping", flush=True)
                     continue
                 id, data = text_tuple
                 timestamp = time.perf_counter() - consumer.start_consume_time
+                print(f"Dispatching CAN frame id={id:#x}, data={data!r}, timestamp={timestamp}", flush=True)
                 # Emit XBee stream payloads to the frontend while still
                 # sending the same decoded frames into the SQLite queue.
                 enqueue_xbee_message(id, data, timestamp)
+                print("Enqueued XBee stream message", flush=True)
                 consumer.add_to_queue(id, data, timestamp)
+                print("Added CAN frame to consumer queue", flush=True)
 
             except Exception as e:
-                print(f"Serial Read Exception: {e}")
+                print(f"Serial Read Exception: {e}", flush=True)
     except KeyboardInterrupt:
         ser.close()
-        print("Serial connection to radio closed.")
+        print("Serial connection to radio closed.", flush=True)

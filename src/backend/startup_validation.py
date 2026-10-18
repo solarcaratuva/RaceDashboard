@@ -8,6 +8,34 @@ import serial.tools.list_ports
 from typing import List, Optional
 
 
+def _port_is_radio_like(port) -> bool:
+    # Digi's XBee USB adapter is shown by lsusb as FTDI FT232 (0403:6001).
+    if port.vid == 0x0403 and port.pid == 0x6001:
+        print(f"[DEBUG] Radio-like port detected by PID/VID: {port.device} ({port.description})")
+        return True
+
+    description = (port.description or "").lower()
+    device = (port.device or "").lower()
+    keywords = (
+        "usb serial port",
+        "usb serial device",
+        "usb-to-uart",
+        "usb uart",
+        "cp210",
+        "silicon labs",
+        "ft232",
+        "ftdi",
+        "xbee",
+        "uart bridge",
+    )
+    is_match = any(keyword in description or keyword in device for keyword in keywords)
+    if is_match:
+        print(f"[DEBUG] Radio-like port matched keywords: {port.device} ({port.description})")
+    else:
+        print(f"[DEBUG] Ignoring non-radio port: {port.device} ({port.description})")
+    return is_match
+
+
 def get_st_link_port() -> Optional[str]:
     """
     Finds the ST-Link's port for livelog mode.
@@ -25,14 +53,23 @@ def get_st_link_port() -> Optional[str]:
 def get_radio_port() -> Optional[str]:
     """
     Finds the radio's port for radio mode.
-    
-    Returns:
-        str: Port device path if found, None otherwise
+
+    XBee adapters often enumerate as CP210x / FTDI / USB UART devices instead
+    of the literal "USB Serial Port" string used by the original code.
     """
+    override = os.environ.get("RACE_RADIO_PORT") or os.environ.get("XBEE_PORT")
+    if override:
+        print(f"[DEBUG] Using radio port override from environment: {override}")
+        return override
+
     ports = serial.tools.list_ports.comports()
+    print(f"[DEBUG] Scanning {len(ports)} serial ports for radio connection")
     for port in ports:
-        if "usb serial port" in port.description.lower():
+        print(f"[DEBUG] Evaluating serial port candidate: {port.device} | {port.description} | vid={port.vid} pid={port.pid}")
+        if _port_is_radio_like(port):
+            print(f"[DEBUG] Selected radio port: {port.device}")
             return port.device
+    print("[DEBUG] No radio port found")
     return None
 
 
@@ -86,10 +123,13 @@ def validate_startup_requirements(log_type: str, input_file_path: Optional[str])
         st_link_port = get_st_link_port()
         if not st_link_port:
             errors.append("ST-Link device not found. Please connect ST-Link for livelog mode.")
-    
+
+    """
     elif log_type == "radio":
         radio_port = get_radio_port()
+        print("Radio")
         if not radio_port:
             errors.append("Radio device not found. Please connect radio for radio mode.")
+    """
     
     return errors
