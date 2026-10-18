@@ -9,30 +9,60 @@ from typing import List, Optional
 
 
 def _port_is_radio_like(port) -> bool:
-    # Digi's XBee USB adapter is shown by lsusb as FTDI FT232 (0403:6001).
-    if port.vid == 0x0403 and port.pid == 0x6001:
-        print(f"[DEBUG] Radio-like port detected by PID/VID: {port.device} ({port.description})")
+    # Common USB-to-serial chips used by XBee adapters, including Windows COM ports.
+    usb_serial_ids = {
+        (0x0403, 0x6001),  # FTDI FT232
+        (0x10C4, 0xEA60),  # Silicon Labs CP210x
+        (0x10C4, 0xEA70),  # Silicon Labs CP210x
+        (0x1A86, 0x7523),  # QinHeng CH340
+        (0x1A86, 0x5523),  # QinHeng CH341
+        (0x067B, 0x2303),  # Prolific PL2303
+    }
+    vendor_id = getattr(port, "vid", None)
+    product_id = getattr(port, "pid", None)
+    device = getattr(port, "device", "") or ""
+    description = getattr(port, "description", "") or ""
+    if (vendor_id, product_id) in usb_serial_ids:
+        print(f"[DEBUG] Radio-like port detected by PID/VID: {device} ({description})")
         return True
 
-    description = (port.description or "").lower()
-    device = (port.device or "").lower()
+    metadata = " ".join(
+        str(value or "")
+        for value in (
+            device,
+            description,
+            getattr(port, "manufacturer", None),
+            getattr(port, "product", None),
+            getattr(port, "interface", None),
+            getattr(port, "hwid", None),
+        )
+    ).casefold()
     keywords = (
         "usb serial port",
         "usb serial device",
         "usb-to-uart",
         "usb uart",
+        "usb to uart",
+        "usb-serial",
         "cp210",
         "silicon labs",
         "ft232",
         "ftdi",
+        "ch340",
+        "ch341",
+        "ch910",
+        "prolific",
+        "pl2303",
         "xbee",
+        "digi",
         "uart bridge",
+        "radio",
     )
-    is_match = any(keyword in description or keyword in device for keyword in keywords)
+    is_match = any(keyword in metadata for keyword in keywords)
     if is_match:
-        print(f"[DEBUG] Radio-like port matched keywords: {port.device} ({port.description})")
+        print(f"[DEBUG] Radio-like port matched keywords: {device} ({description})")
     else:
-        print(f"[DEBUG] Ignoring non-radio port: {port.device} ({port.description})")
+        print(f"[DEBUG] Ignoring non-radio port: {device} ({description})")
     return is_match
 
 
@@ -124,12 +154,9 @@ def validate_startup_requirements(log_type: str, input_file_path: Optional[str])
         if not st_link_port:
             errors.append("ST-Link device not found. Please connect ST-Link for livelog mode.")
 
-    """
     elif log_type == "radio":
         radio_port = get_radio_port()
-        print("Radio")
         if not radio_port:
             errors.append("Radio device not found. Please connect radio for radio mode.")
-    """
-    
+
     return errors

@@ -7,12 +7,17 @@ from backend.can_message import decode_message
 BACKEND_DATA_STREAM = "backend_data_stream"
 
 # Keep a separate queue for XBee/radio/frontend events so the SQLite consumer queue is not disturbed.
-xbee_queue: Queue = Queue()
+xbee_queue: Queue[tuple[int | None, bytes, float]] = Queue()
 
 
 def enqueue_xbee_message(id: int, data: bytes, timestamp: float) -> None:
     """Queue a parsed CAN message for websocket emission without disturbing the SQLite consumer queue."""
     xbee_queue.put((id, data, timestamp))
+
+
+def enqueue_raw_radio_data(data: bytes, timestamp: float) -> None:
+    """Queue exact radio bytes for the frontend, independent of text decoding or CAN parsing."""
+    xbee_queue.put((None, data, timestamp))
 
 
 def format_message_payload(id: int, data: bytes, timestamp: float) -> dict:
@@ -33,8 +38,21 @@ def format_message_payload(id: int, data: bytes, timestamp: float) -> dict:
     return payload
 
 
+def format_raw_radio_payload(data: bytes, timestamp: float) -> dict:
+    """Represent every received serial byte losslessly as hexadecimal JSON text."""
+    return {
+        "source": "xbee",
+        "messageId": "serial",
+        "timestamp": timestamp,
+        "rawData": data.hex(),
+        "rawEncoding": "hex",
+        "messageName": "Radio serial bytes (hex)",
+        "signals": None,
+    }
+
+
 def xbee_emit_loop():
-    """Emit queued CAN messages to connected Socket.IO clients."""
+    """Emit queued radio bytes and parsed CAN messages to connected Socket.IO clients."""
     while True:
         batch = []
         while True:
@@ -42,7 +60,10 @@ def xbee_emit_loop():
                 id, data, timestamp = xbee_queue.get_nowait()
             except Empty:
                 break
-            batch.append(format_message_payload(id, data, timestamp))
+            if id is None:
+                batch.append(format_raw_radio_payload(data, timestamp))
+            else:
+                batch.append(format_message_payload(id, data, timestamp))
 
         if batch:
             socketio.emit(BACKEND_DATA_STREAM, batch)
