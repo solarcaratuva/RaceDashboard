@@ -11,6 +11,7 @@ venv
 *.sqlite-journal
 *.txt
 !requirements.txt
+!resources/log-files/*.txt
 TODO
 !example.txt
 .vscode

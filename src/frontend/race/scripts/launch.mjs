@@ -13,10 +13,12 @@ import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RACE_DIR = path.resolve(__dirname, ".."); // src/frontend/race
 const REPO_ROOT = path.resolve(RACE_DIR, "../../.."); // project root
+const LOG_FILES_DIR = path.join(REPO_ROOT, "resources", "log-files"); // resources/log-files (sample logs for preset dropdown)
 
 const SETUP_PORT = 5498; // distinct from the legacy logger's setup UI (5499)
 const BACKEND_PORT = 5500; // matches SOCKETIO_PORT in src/main.py
@@ -213,8 +215,16 @@ const PAGE = `<!doctype html>
       <option value="db">db — open an existing .db database</option>
     </select>
 
+    <div class="field" id="presetField">
+      <label for="presetFile">Sample log file</label>
+      <select id="presetFile">
+        <option value="">none — enter my own file path below</option>
+      </select>
+      <div class="hint">Files come from resources/log-files.</div>
+    </div>
+
     <div class="field" id="inputFileField">
-      <label for="inputFile">Input file path</label>
+      <label for="inputFile" id="inputFileLabel">Input file path</label>
       <input id="inputFile" name="inputFile" type="text" placeholder="/path/to/capture.log" />
       <div class="hint" id="inputFileHint">Path is relative to repo root. Input a .log or .txt file</div>
     </div>
@@ -240,24 +250,56 @@ const PAGE = `<!doctype html>
   const errorsEl = document.getElementById("errors");
   const statusEl = document.getElementById("status");
   const submitBtn = document.getElementById("submit-btn");
+  const presetField = document.getElementById("presetField");
+  const presetEl = document.getElementById("presetFile");
+  const inputFileLabel = document.getElementById("inputFileLabel");
+
+  async function loadPresets() {
+    try {
+      const res = await fetch("/log-files");
+      const files = await res.json();
+      files.forEach((file) => {
+        var newOption = document.createElement("option");
+        newOption.value = file;
+        newOption.textContent = file;
+        presetEl.appendChild(newOption);
+      });
+    } catch {
+      // dropdown keeps only the "none" option
+    }
+  }
 
   function syncFields() {
     const needsFile = FILE_REQUIRED.includes(logTypeEl.value);
+    const allowsPreset = logTypeEl.value === "pastlog" || logTypeEl.value === "mock_livelog";
     inputFileField.classList.toggle("visible", needsFile);
-    inputFileEl.required = needsFile;
+    presetField.classList.toggle("visible", allowsPreset);
+    if (!allowsPreset) {
+      presetEl.value = "";
+    }
+    inputFileEl.required = needsFile && !presetEl.value;
+    inputFileLabel.textContent = allowsPreset
+      ? "Or enter your own file path"
+      : "Input file path";
     inputFileHint.textContent = logTypeEl.value === "db"
       ? "Path is relative to repo root. Input a .db SQLite database"
       : "Path is relative to repo root. Input a .log or .txt file";
   }
   logTypeEl.addEventListener("change", syncFields);
+  presetEl.addEventListener("change", syncFields);
   syncFields();
+  loadPresets();
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     errorsEl.textContent = "";
+    let inputFile = inputFileEl.value.trim();
+    if (!inputFile && presetEl.value) {
+      inputFile = "resources/log-files/" + presetEl.value;
+    }
     const payload = {
       logType: logTypeEl.value,
-      inputFile: inputFileEl.value,
+      inputFile,
       outputDB: document.getElementById("outputDB").value,
       dbcBranch: document.getElementById("dbcBranch").value,
     };
@@ -325,6 +367,18 @@ const setupServer = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/status") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(state));
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/log-files") {
+    let files = [];
+    try {
+      files = fs.readdirSync(LOG_FILES_DIR).filter((name) => name.endsWith(".log") || name.endsWith(".txt")).sort();
+    } catch {
+      // Non-fatal: shows empty dropdown if no log files exist under log-files folder
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(files));
     return;
   }
 
