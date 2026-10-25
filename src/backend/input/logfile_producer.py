@@ -2,6 +2,7 @@ import backend.input.consumer as consumer
 from backend.sockio.stream_xbee import enqueue_xbee_message
 import time
 import re
+from datetime import datetime
 
 # Time in seconds between reading lines of a log file and adding them to the queue
 LOOP_TIME = 0.01
@@ -31,8 +32,29 @@ coonPattern = re.compile(r'(\d+),(0x[0-9A-Fa-f]+),(\d+),([0-9A-Fa-f\s]+)')
 # This format does not carry a timestamp inside the line.
 radioPattern = re.compile(r'.+ ID (0x[0-9A-Fa-f]+) Length \d+ Data (0x[0-9A-Fa-f]+)')
 
+# Live XBEE CAN message format
+# MM-DD-YYYY HR:MI:SEC.OND,MNM,TYPE,{VARIABLE LENGTH HEX PAYLOAD}
+    # MI = minute
+    # MNM = message number
+# Ex: 10-18-2026 16:18:27.944,512,RECV,2C040006025824911304E44CCE00030190010004012C0400030190010004012C040001043BFFFD0366A2000301
+# Message is parsed iff type = "RECV", dropped if otherwise
+
+recvPattern = re.compile(
+    r'^(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}\.\d{1,6}),(\d+),([A-Za-z]+),((?:[0-9A-Fa-f]{2})+)$'
+)
+
 def parse_line(log_line: str):
     global msIncrementer, secondsPrevious
+
+    match = recvPattern.match(log_line.strip())
+    if match is not None:
+        if match.group(3) != "RECV":
+            return None
+
+        timestamp = datetime.strptime(match.group(1), "%m-%d-%Y %H:%M:%S.%f").timestamp()
+        id_int = int(match.group(2))
+        data_bytes = bytes.fromhex(match.group(4))
+        return (id_int, data_bytes, timestamp)
 
     if '/' in log_line:
         match = solarPattern.search(log_line)
@@ -106,10 +128,15 @@ def process_logfile_live(path_to_log_file: str) -> None:
             if cm_tup is None:  # line did not match the format
                 continue
             id, data, timestamp = cm_tup
+            replay_timestamp = timestamp
             if timestamp is None:
                 timestamp = time.perf_counter() - consumer.start_consume_time
 
-            enqueue_xbee_message(id, data, timestamp)
+            enqueue_xbee_message(
+                id,
+                data,
+                timestamp,
+                replay_timestamp=replay_timestamp,
+            )
             consumer.add_to_queue(id, data, timestamp)
             time.sleep(LOOP_TIME)
-
