@@ -12,7 +12,7 @@ import logging
 # This is set from main.py before the server starts.
 selected_data_type = None
 
-def set_selected_data_type(data_type: str) -> None:
+def set_socket_stream_data_type(data_type: str) -> None:
     global selected_data_type
     selected_data_type = data_type
 

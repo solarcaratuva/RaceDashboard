@@ -10,6 +10,8 @@ import webbrowser
 import backend.dbcs as dbcs
 from backend.sockio.socket import socketio, app as socketio_app
 import backend.sockio.socket as socket_module
+from backend.sockio.socket import set_socket_stream_data_type
+from backend.sockio.stream_xbee import set_xbee_stream_data_type
 from backend.db_connection import DbConnection
 from backend.input import consumer, logfile_producer, live_log_producer, radio_producer
 from functools import partial
@@ -161,7 +163,8 @@ def run_server(args):
         extensions.aws_profile = args.aws_profile[0] if args.aws_profile else "default"
         start_react_dev_server()
 
-    socket_module.set_selected_data_type(args.logType)
+    socket_module.set_socket_stream_data_type(args.logType)
+    set_xbee_stream_data_type(args.logType)
     print(f"Starting socketio server on localhost:{SOCKETIO_PORT}")
     socketio.run(socketio_app, debug=False, allow_unsafe_werkzeug=True, host="0.0.0.0", port=SOCKETIO_PORT)
 
