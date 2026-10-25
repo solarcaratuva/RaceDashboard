@@ -107,7 +107,14 @@ def get_replay_delay(
 
 
 def xbee_emit_loop():
-    """Emit queued radio bytes and parsed CAN messages to connected Socket.IO clients."""
+    """
+    Emit queued radio bytes and parsed CAN messages to connected Socket.IO clients.
+    Function uses a double while True loop format. Outer loop keeps the background process alive as long as backend is running,
+        emits batch[], and reads Queue at a fixed polling interval (0.2 seconds)
+    and inner loop will
+        - Fill batches to be sent by outer loop for most data stream modes
+        - Emit single msgs based on timestamp delay for mock_livelog mdoe
+    """
     previous_timestamp = None
     fallback_elapsed = 0.0
     has_previous_message = False
@@ -124,9 +131,11 @@ def xbee_emit_loop():
             else:
                 if selected_data_type == "mock_livelog":
                     if batch:
+                        # send everything, empty the batch
                         socketio.emit(BACKEND_DATA_STREAM, batch)
                         batch = []
 
+                    # get_replay_delay() takes and returns all state info needed to pace msgs
                     delay, previous_timestamp, fallback_elapsed, has_previous_message = (
                         get_replay_delay(
                             replay_timestamp,
@@ -137,14 +146,12 @@ def xbee_emit_loop():
                     )
                     if delay:
                         socketio.sleep(delay) # type: ignore
-                    socketio.emit(
-                        BACKEND_DATA_STREAM,
-                        [format_message_payload(id, data, timestamp)],
-                    )
+                    socketio.emit(BACKEND_DATA_STREAM, [format_message_payload(id, data, timestamp)],)
+                # All data types besides mock_livelog have no delay btwn msgs
                 else:
                     batch.append(format_message_payload(id, data, timestamp))
 
         if batch:
             socketio.emit(BACKEND_DATA_STREAM, batch)
-        poll_interval = 0.01 if selected_data_type == "mock_livelog" else 0.2
-        socketio.sleep(poll_interval)  # type: ignore[arg-type]
+        # 0.2 second polling interval for this SocketIO background task
+        socketio.sleep(0.2)  # type: ignore[arg-type]
