@@ -1,12 +1,62 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>UVA Solar Car - Telemetry Dashboard</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              uva: {
+                orange: '#F15A24',
+                blue: '#232D4B',
+                navy: '#0C2340',
+                cyan: '#00F0FF',
+              },
+              dark: {
+                bg: '#0A0D14',
+                card: '#121824',
+                card2: '#161E2E',
+                border: '#1E293B',
+                hover: '#1A2333'
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'Fira Code', 'monospace']
+            }
+          }
+        }
+      }
+    </script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- Leaflet CSS & JS for Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+      body { font-family: 'Inter', sans-serif; background-color: #0A0D14; color: #E2E8F0; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: #0A0D14; }
+      ::-webkit-scrollbar-thumb { background: #1E293B; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #334155; }
+      .leaflet-container { background: #080b12 !important; }
+      .heatmap-overlay-active {
+        filter: hue-rotate(90deg) saturate(300%) contrast(150%) brightness(0.8);
+      }
+    </style>
   </head>
-  <body>
+  <body class="bg-dark-bg text-slate-100 min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
