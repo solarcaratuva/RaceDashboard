@@ -203,7 +203,7 @@ def get_visible_range():
     Returns JSON with x/y arrays per signal.
     """
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         signal_ids = data.get('signal_ids', [])
         start_time = data.get('start_time')
         end_time = data.get('end_time')

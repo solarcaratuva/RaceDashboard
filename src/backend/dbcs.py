@@ -20,8 +20,8 @@ def get_messages_from_dbcs() -> dict:
     """ Returns a dictionary with message names as keys and a subdictionary of signal names and their types as values """
 
     res = dict()
-    for dbc in DBCs:
-        for message in dbc.messages:
+    for dbc in DBCs: # type: ignore
+        for message in dbc.messages: # type: ignore
             res[message.name] = dict()
             for signal in message.signals:
                 if signal.length == 1:
@@ -44,7 +44,9 @@ def get_fault_signals() -> list[str]:
         return fault_signals
     
     for dbc in DBCs:
-        for message in dbc.messages:
+        # ``messages`` is available at runtime, but is missing from some
+        # cantools type definitions.
+        for message in getattr(dbc, "messages", []):
             for signal in message.signals:
                 # Check if the signal has a comment and if it contains 'fault' (case insensitive)
                 if signal.comment and 'fault' in signal.comment.lower():

@@ -46,11 +46,17 @@ function findPython() {
   return null;
 }
 
-function validate({ logType, inputFile, outputDB }) {
+function validate({ logType, inputFile, outputDB, parity = "N", stopbits = "1" }) {
   const errors = [];
   if (!LOG_TYPES.includes(logType)) {
     errors.push(`Unknown log type: ${logType}`);
     return errors; // nothing else worth checking
+  }
+  if (logType === "radio" && !["N", "E", "O", "M", "S"].includes(parity)) {
+    errors.push("Parity must be N, E, O, M, or S for radio mode");
+  }
+  if (logType === "radio" && !["1", "1.5", "2"].includes(String(stopbits))) {
+    errors.push("Stop bits must be 1, 1.5, or 2 for radio mode");
   }
   if (FILE_REQUIRED_TYPES.includes(logType)) {
     if (!inputFile || !inputFile.trim()) {
@@ -86,7 +92,7 @@ function prefixLog(prefix) {
   };
 }
 
-function launchApp({ logType, inputFile, outputDB, dbcBranch }) {
+function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stopbits = "1" }) {
   const python = findPython();
   if (!python) {
     state.error = "Could not find python3 or python on PATH.";
@@ -98,6 +104,7 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch }) {
   if (inputFile && inputFile.trim()) args.push("--inputFile", inputFile.trim());
   if (outputDB && outputDB.trim()) args.push("--outputDB", outputDB.trim());
   if (dbcBranch && dbcBranch.trim()) args.push("--set_dbc_branch", dbcBranch.trim());
+  if (logType === "radio") args.push("--parity", parity, "--stopbits", stopbits);
 
   console.log(`\n[launcher] Starting backend: ${python} ${args.join(" ")}`);
   backendProc = spawn(python, args, { cwd: REPO_ROOT });
@@ -114,7 +121,10 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch }) {
 
   console.log("[launcher] Starting Vite dev server: npm run dev");
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  frontendProc = spawn(npmCmd, ["run", "dev"], { cwd: RACE_DIR });
+  frontendProc = spawn(npmCmd, ["run", "dev"], {
+    cwd: RACE_DIR,
+    shell: process.platform === "win32",
+  });
   frontendProc.stderr.on("data", prefixLog("frontend"));
   frontendProc.stdout.on("data", (chunk) => {
     const text = stripAnsi(chunk.toString());
@@ -219,6 +229,24 @@ const PAGE = `<!doctype html>
       <div class="hint" id="inputFileHint">Path is relative to repo root. Input a .log or .txt file</div>
     </div>
 
+    <div class="field" id="radioSerialField">
+      <label for="parity">Parity bits</label>
+      <select id="parity" name="parity">
+        <option value="N" selected>None</option>
+        <option value="E">Even</option>
+        <option value="O">Odd</option>
+        <option value="M">Mark</option>
+        <option value="S">Space</option>
+      </select>
+
+      <label for="stopbits">Stop bits</label>
+      <select id="stopbits" name="stopbits">
+        <option value="1" selected>1</option>
+        <option value="1.5">1.5</option>
+        <option value="2">2</option>
+      </select>
+    </div>
+
     <label for="outputDB">Output database (optional)</label>
     <input id="outputDB" name="outputDB" type="text" placeholder="leave blank for a timestamped DB" />
 
@@ -236,6 +264,9 @@ const PAGE = `<!doctype html>
   const inputFileField = document.getElementById("inputFileField");
   const inputFileHint = document.getElementById("inputFileHint");
   const inputFileEl = document.getElementById("inputFile");
+  const radioSerialField = document.getElementById("radioSerialField");
+  const parityEl = document.getElementById("parity");
+  const stopbitsEl = document.getElementById("stopbits");
   const form = document.getElementById("setup-form");
   const errorsEl = document.getElementById("errors");
   const statusEl = document.getElementById("status");
@@ -245,6 +276,7 @@ const PAGE = `<!doctype html>
     const needsFile = FILE_REQUIRED.includes(logTypeEl.value);
     inputFileField.classList.toggle("visible", needsFile);
     inputFileEl.required = needsFile;
+    radioSerialField.classList.toggle("visible", logTypeEl.value === "radio");
     inputFileHint.textContent = logTypeEl.value === "db"
       ? "Path is relative to repo root. Input a .db SQLite database"
       : "Path is relative to repo root. Input a .log or .txt file";
@@ -260,6 +292,8 @@ const PAGE = `<!doctype html>
       inputFile: inputFileEl.value,
       outputDB: document.getElementById("outputDB").value,
       dbcBranch: document.getElementById("dbcBranch").value,
+      parity: parityEl.value,
+      stopbits: stopbitsEl.value,
     };
     submitBtn.disabled = true;
     submitBtn.textContent = "Launching…";
