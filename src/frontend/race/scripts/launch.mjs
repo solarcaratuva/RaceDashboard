@@ -14,6 +14,8 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
+import os from "node:os";
+import { pipeline } from "node:stream/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RACE_DIR = path.resolve(__dirname, ".."); // src/frontend/race
@@ -39,6 +41,7 @@ const state = {
 // references to the flask-python server and vite-ts servers respectively
 let backendProc = null;
 let frontendProc = null;
+const uploadedFileDirs = new Set();
 
 function findPython() {
   for (const cmd of ["python3", "python"]) {
@@ -63,16 +66,16 @@ function validate({ logType, inputFile, outputDB, parity = "N", stopbits = "1" }
   if (FILE_REQUIRED_TYPES.includes(logType)) {
     if (!inputFile || !inputFile.trim()) {
       errors.push(`Input file is required for ${logType} mode`);
-    } else if (logType === "db" && !inputFile.trim().endsWith(".db")) {
+    } else if (logType === "db" && path.extname(inputFile.trim()).toLowerCase() !== ".db") {
       errors.push("Input file must be .db for db mode");
     } else if (
       logType !== "db" &&
-      !(inputFile.trim().endsWith(".log") || inputFile.trim().endsWith(".txt"))
+      ![".log", ".txt"].includes(path.extname(inputFile.trim()).toLowerCase())
     ) {
       errors.push(`Input file must be .log or .txt for ${logType} mode`);
     }
   }
-  if (outputDB && outputDB.trim() && !outputDB.trim().endsWith(".db")) {
+  if (outputDB && outputDB.trim() && path.extname(outputDB.trim()).toLowerCase() !== ".db") {
     errors.push("Output DB must be a .db file");
   }
   return errors;
@@ -118,6 +121,7 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stop
       state.launching = false;
     }
     console.log(`[launcher] Backend process exited (code ${code})`);
+    cleanupUploadedFiles();
   });
   state.backendStarted = true;
 
@@ -146,6 +150,13 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stop
     }
     console.log(`[launcher] Frontend process exited (code ${code})`);
   });
+}
+
+function cleanupUploadedFiles() {
+  for (const dir of uploadedFileDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  uploadedFileDirs.clear();
 }
 
 function openBrowser(url) {
@@ -236,8 +247,10 @@ const PAGE = `<!doctype html>
     <div class="field" id="inputFileField">
       <label for="inputFile" id="inputFileLabel">Input file path</label>
       <input id="inputFile" name="inputFile" type="text" placeholder="/path/to/capture.log" />
+      <label for="filePicker">Or choose a file from your computer</label>
+      <input id="filePicker" type="file" accept=".log,.txt,.db,.LOG,.TXT,.DB" />
       <div class="hint" id="inputFileHint">Path is relative to repo root. Input a .log or .txt file</div>
-    </div>
+      </div>
 
     <div class="field" id="radioSerialField">
       <label for="parity">Parity bits</label>
@@ -274,6 +287,7 @@ const PAGE = `<!doctype html>
   const inputFileField = document.getElementById("inputFileField");
   const inputFileHint = document.getElementById("inputFileHint");
   const inputFileEl = document.getElementById("inputFile");
+  const filePickerEl = document.getElementById("filePicker");
   const radioSerialField = document.getElementById("radioSerialField");
   const parityEl = document.getElementById("parity");
   const stopbitsEl = document.getElementById("stopbits");
@@ -308,7 +322,7 @@ const PAGE = `<!doctype html>
     if (!allowsPreset) {
       presetEl.value = "";
     }
-    inputFileEl.required = needsFile && !presetEl.value;
+    inputFileEl.required = needsFile && !presetEl.value && !filePickerEl.files.length;
     inputFileLabel.textContent = allowsPreset
       ? "Or enter your own file path"
       : "Input file path";
@@ -317,7 +331,20 @@ const PAGE = `<!doctype html>
       : "Path is relative to repo root. Input a .log or .txt file";
   }
   logTypeEl.addEventListener("change", syncFields);
-  presetEl.addEventListener("change", syncFields);
+  presetEl.addEventListener("change", () => {
+    if (presetEl.value) filePickerEl.value = "";
+    syncFields();
+  });
+  inputFileEl.addEventListener("input", () => {
+    filePickerEl.value = "";
+  });
+  filePickerEl.addEventListener("change", () => {
+    if (filePickerEl.files.length) {
+      inputFileEl.value = "";
+      presetEl.value = "";
+    }
+    syncFields();
+  });
   syncFields();
   loadPresets();
 
@@ -327,6 +354,31 @@ const PAGE = `<!doctype html>
     let inputFile = inputFileEl.value.trim();
     if (!inputFile && presetEl.value) {
       inputFile = "resources/log-files/" + presetEl.value;
+    }
+    const selectedFile = filePickerEl.files[0];
+    if (selectedFile) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Uploading file…";
+      try {
+        const uploadRes = await fetch("/upload?name=" + encodeURIComponent(selectedFile.name), {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: selectedFile,
+        });
+        const uploadData = await uploadRes.json();
+        if (!uploadRes.ok) {
+          errorsEl.textContent = uploadData.error || "Could not upload the selected file.";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Launch dashboard";
+          return;
+        }
+        inputFile = uploadData.filePath;
+      } catch (err) {
+        errorsEl.textContent = "Could not upload the selected file: " + err;
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Launch dashboard";
+        return;
+      }
     }
     const payload = {
       logType: logTypeEl.value,
@@ -406,12 +458,49 @@ const setupServer = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/log-files") {
     let files = [];
     try {
-      files = fs.readdirSync(LOG_FILES_DIR).filter((name) => name.endsWith(".log") || name.endsWith(".txt")).sort();
+      files = fs.readdirSync(LOG_FILES_DIR)
+        .filter((name) => [".log", ".txt"].includes(path.extname(name).toLowerCase()))
+        .sort();
     } catch {
       // Non-fatal: shows empty dropdown if no log files exist under log-files folder
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(files));
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/upload?")) {
+    const url = new URL(req.url, "http://localhost");
+    const name = url.searchParams.get("name") || "";
+    const extension = path.extname(name).toLowerCase();
+    if (![".log", ".txt", ".db"].includes(extension)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Selected file must be .log, .txt, or .db." }));
+      req.resume();
+      return;
+    }
+
+    (async () => {
+      let uploadDir;
+      try {
+        uploadDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "race-dashboard-"));
+        uploadedFileDirs.add(uploadDir);
+        const filePath = path.join(uploadDir, `input${extension}`);
+        await pipeline(req, fs.createWriteStream(filePath, { flags: "wx" }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ filePath }));
+      } catch (error) {
+        if (uploadDir) {
+          fs.rmSync(uploadDir, { recursive: true, force: true });
+          uploadedFileDirs.delete(uploadDir);
+        }
+        console.error("[launcher] Failed to save uploaded file:", error);
+        if (!res.headersSent && !res.destroyed) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Could not save the selected file." }));
+        }
+      }
+    })();
     return;
   }
 
@@ -463,6 +552,7 @@ function shutdown() {
   if (backendProc) backendProc.kill("SIGTERM");
   if (frontendProc) frontendProc.kill("SIGTERM");
   setupServer.close();
+  cleanupUploadedFiles();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
