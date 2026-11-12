@@ -33,7 +33,15 @@ Click on the GUI setup link to select input data type and necessary config optio
 The site will auto redirect to the Race Dashboard. Errors print in the terminal
 
 ### Config Options
-**Mock**
+| Source | Config Option |
+| --- | --- |
+| `pastlog` | File Path
+| `mock_livelog` | File Path
+| `livelog` | None
+| `radio` | None
+| `db` | File Path
+
+File paths must be relative to repo root. Log options injest both .txt and .log files while DB takes .db files.
 
 ## Ports
 
@@ -67,15 +75,13 @@ src/main.py
 
 `main.py` selects the source and starts the matching producer:
 
-| Source | Producer | Behavior | Config Option |
-| --- | --- | --- | --- |
-| `pastlog` | `logfile_producer.py` | Parses a complete `.log` or `.txt` capture, then writes decoded messages to Dashboard. | File Path
-| `mock_livelog` | `logfile_producer.py` | Replays a capture incrementally using timestamps on the log file (falls back to 0.1 sec) | File Path
-| `livelog` | `live_log_producer.py` | Reads log-formatted CAN messages from an attached ST-Link at `921600` baud. | None
-| `radio` | `radio_producer.py` | Reads CAN messages from an XBEE radio input. | None
-| `db` | `main.py` | Opens an existing SQLite database. | File Path
-
-File paths must be relative to repo root. Log options injest both .txt and .log files while DB takes .db files.
+| Source | Producer | Behavior |
+| --- | --- | --- |
+| `pastlog` | `logfile_producer.py` | Parses a complete `.log` or `.txt` capture, then writes decoded messages to Dashboard. 
+| `mock_livelog` | `logfile_producer.py` | Replays a capture incrementally using timestamps on the log file (falls back to 0.1 sec)  
+| `livelog` | `live_log_producer.py` | Reads log-formatted CAN messages from an attached ST-Link at `921600` baud.
+| `radio` | `radio_producer.py` | Reads CAN messages from an XBEE radio input.
+| `db` | `main.py` | Opens an existing SQLite database.
 
 Each producer sends a CAN ID, payload, and timestamp to `consumer.py`. The consumer decodes the frame with `can_message.py` using the loaded DBC files, checks configured alerts, and writes signal values into SQLite through `db_connection.py`. `DbConnection` provides the thread-safe database access used by ingestion and request handlers.
 
