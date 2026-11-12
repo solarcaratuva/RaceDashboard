@@ -2,7 +2,7 @@
 
 The Race Dashboard is a React and TypeScript interface for monitoring solar-car telemetry. A Python backend ingests CAN data, decodes it using the project's DBC files, stores it in SQLite, and exposes HTTP and Socket.IO interfaces for dashboard clients.
 
-The React dashboard and Python backend run as separate processes.
+The React dashboard and Python backend run as separate processes but are activated together.
 
 ## Quick Start
 
@@ -21,27 +21,16 @@ cd src/frontend/race
 npm install
 ```
 
-Start both servers in separate terminals.
+Start the Dashboard
 
-**Terminal 1: React frontend** (from `src/frontend/race`)
-
-```bash
-npm run dev
-```
-
-**Terminal 2: Python backend** (from the project root)
+**Spin-Up Backend & Frontend Simultaneously**
 
 ```bash
-python3 src/main.py <source_type> [flags]
+cd src/frontend/race
+npm start
 ```
-
-For example:
-
-```bash
-python3 src/main.py mock_livelog --inputFile /path/to/capture.log
-```
-
-Open the URL printed by Vite, normally `http://localhost:5173`.
+Click on the GUI setup link to select input data type and necessary config options
+The site will auto redirect to the Race Dashboard. Errors print in the terminal
 
 ## Ports
 
@@ -52,16 +41,6 @@ Open the URL printed by Vite, normally `http://localhost:5173`.
 | `5499` | Legacy startup-options server when `main.py` runs without arguments |
 
 The no-argument command starts the legacy setup UI, not the React development server. Start Vite separately in all cases.
-
-## Legacy Logger UI
-
-Running `python3 src/main.py` without arguments starts the setup UI on port `5499`. It lets you choose the log type, input file, output database, and DBC branch before launching the backend on port `5500`. Required input files are `.log` or `.txt` for `pastlog` and `mock_livelog`, and `.db` for `db`.
-
-The legacy logger includes three views:
-
-- **Debug Dashboard:** View selected CAN messages and their current values.
-- **Graph View:** Plot selected CAN signals over time.
-- **Alerts Manager:** Create, delete, and review alerts. Fault signals can trigger alerts automatically.
 
 ## Technology Stack
 
