@@ -67,7 +67,7 @@ function validate({ logType, inputFile, outputDB, parity = "N", stopbits = "1" }
       errors.push("Input file must be .db for db mode");
     } else if (
       logType !== "db" &&
-      !(inputFile.trim().endsWith(".log") || inputFile.trim().endsWith(".txt"))
+      !(inputFile.trim().toLowerCase().endsWith(".log") || inputFile.trim().toLowerCase().endsWith(".txt"))
     ) {
       errors.push(`Input file must be .log or .txt for ${logType} mode`);
     }
@@ -406,7 +406,10 @@ const setupServer = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/log-files") {
     let files = [];
     try {
-      files = fs.readdirSync(LOG_FILES_DIR).filter((name) => name.endsWith(".log") || name.endsWith(".txt")).sort();
+      files = fs.readdirSync(LOG_FILES_DIR).filter((name) => {
+        const lower = name.toLowerCase();
+        return lower.endsWith(".log") || lower.endsWith(".txt");
+      }).sort();
     } catch {
       // Non-fatal: shows empty dropdown if no log files exist under log-files folder
     }
