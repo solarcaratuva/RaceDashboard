@@ -1,56 +1,108 @@
 import backend.input.consumer as consumer
+from backend.sockio.stream_xbee import enqueue_xbee_message
 import time
 import re
-
+from datetime import datetime
 
 # Time in seconds between reading lines of a log file and adding them to the queue
 LOOP_TIME = 0.01
 
-# Logfile format:               Timestamp                 ID                              Data Bytes
-pattern = re.compile(r'(\d{2}):(\d{2}):(\d{2}) .+ ID ([0-9A-FXa-fx]+) Length \d+ Data (0x[0-9A-Fa-f]+)')
+# Solar log format
+# Example: 00:00:01 DEBUG /root/Rivanna2/Common/src/MainCANInterface.cpp:40: Sent CAN message with ID 0x406 Length 6 Data 0xa41f770200c0
+#
+# Group 1: (\d{2})              - Hours   (e.g. "00")
+# Group 2: (\d{2})              - Minutes (e.g. "00")
+# Group 3: (\d{2})              - Seconds (e.g. "01")
+#          .+                   - Matches the middle text (DEBUG, file path, "Sent CAN message with")
+# Group 4: (0x[0-9A-Fa-f]+)    - CAN message hex ID after "ID " (e.g. "0x406")
+#          Length \d+            - Matches "Length" and its digit(s), not captured (e.g. "Length 6")
+# Group 5: (0x[0-9A-Fa-f]+)    - Raw hex data bytes after "Data " (e.g. "0xa41f770200c0")
+solarPattern = re.compile(r'(\d{2}):(\d{2}):(\d{2}) .+ ID (0x[0-9A-Fa-f]+) Length \d+ Data (0x[0-9A-Fa-f]+)')
 
 # These global vars are required for the non-live log-file processing
 msIncrementer = 0
 secondsPrevious = None
 
 
-def parse_line(log_line: str) -> tuple[int, bytes, float]:
+# Custom Coon Format: 687,0x400,8,01 00 00 00 00 00 00 00
+# Groups: (Timestamp), (Hex ID), (Length), (Hex Data)
+coonPattern = re.compile(r'(\d+),(0x[0-9A-Fa-f]+),(\d+),([0-9A-Fa-f\s]+)')
+
+# Generic radio-style format: any line containing ID, Length, and Data.
+# This format does not carry a timestamp inside the line.
+radioPattern = re.compile(r'.+ ID (0x[0-9A-Fa-f]+) Length \d+ Data (0x[0-9A-Fa-f]+)')
+
+# Live XBEE CAN message format
+# MM-DD-YYYY HR:MI:SEC.OND,MNM,TYPE,{VARIABLE LENGTH HEX PAYLOAD}
+    # MI = minute
+    # MNM = message number
+# Ex: 10-18-2026 16:18:27.944,512,RECV,2C040006025824911304E44CCE00030190010004012C0400030190010004012C040001043BFFFD0366A2000301
+# Message is parsed iff type = "RECV", dropped if otherwise
+
+recvPattern = re.compile(
+    r'^(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}\.\d{1,6}),(\d+),([A-Za-z]+),((?:[0-9A-Fa-f]{2})+)$'
+)
+
+def parse_line(log_line: str):
     global msIncrementer, secondsPrevious
 
-    match = pattern.search(log_line)
-    if match is None:  # if the line from the file does not match the REGEX, return none
-        return None
+    match = recvPattern.match(log_line.strip())
+    if match is not None:
+        if match.group(3) != "RECV":
+            return None
 
-    hours, minutes, seconds = map(int, match.groups()[:3])
-    id_hex = match.group(4)
-    data_hex = match.group(5)
+        timestamp = datetime.strptime(match.group(1), "%m-%d-%Y %H:%M:%S.%f").timestamp()
+        id_int = int(match.group(2))
+        data_bytes = bytes.fromhex(match.group(4))
+        return (id_int, data_bytes, timestamp)
 
-    # Convert time to seconds
-    seconds = hours * 3600 + minutes * 60 + seconds
+    if '/' in log_line:
+        match = solarPattern.search(log_line)
+        if match is None:
+            return None
 
-    # Check if the seconds have changed (First message just ignore), if it has not changed then increment
-    if secondsPrevious is not None and seconds == secondsPrevious:
-        msIncrementer += 5 # assume the current message is 5ms after the previous one
-    else:  # resets if it changes (or if it is the first message)
-        msIncrementer = 0
-        secondsPrevious = seconds
+        hours = int(match.group(1))
+        minutes = int(match.group(2))
+        seconds = int(match.group(3))
+        id_hex = match.group(4)
+        data_hex = match.group(5).replace("0x", "")
 
-    seconds += msIncrementer / 1000
+        id_int = int(id_hex, 16)
+        data_bytes = bytes.fromhex(data_hex)
 
-    # Convert the ID to an integer
-    if id_hex.startswith('0x') or id_hex.startswith('0X'):  # if formatted as hex (legacy log files)
-        id_int = int(id_hex[2:], 16)
-    else:                                                   # if formatted as decimal
-        id_int = int(id_hex)
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        if secondsPrevious == total_seconds:
+            msIncrementer += 1
+        else:
+            msIncrementer = 0
+            secondsPrevious = total_seconds
 
-    # Convert the data to a byte object
-    data_bytes = bytes.fromhex(data_hex[2:])
+        time_since_start = total_seconds + msIncrementer * 0.001
+        return (id_int, data_bytes, time_since_start)
 
-    time_since_start = seconds
+    match = coonPattern.search(log_line)
+    if match is not None:
+        raw_timestamp = match.group(1)
+        id_hex = match.group(2)
+        data_hex = match.group(4).replace(" ", "")
 
-    cm_tuple = (id_int, data_bytes, time_since_start)
-    return cm_tuple
+        id_int = int(id_hex, 16)
+        data_bytes = bytes.fromhex(data_hex)
 
+        time_since_start = int(raw_timestamp) / 1000.0
+        return (id_int, data_bytes, time_since_start)
+
+    match = radioPattern.search(log_line)
+    if match is not None:
+        id_hex = match.group(1)
+        data_hex = match.group(2)
+
+        id_int = int(id_hex, 16)
+        data_bytes = bytes.fromhex(data_hex[2:])
+
+        return (id_int, data_bytes, None)
+
+    return None
 
 def process_logfile(path_to_log_file: str) -> None:
     """ Processes a log file and adds all CAN messages to the queue"""
@@ -59,7 +111,11 @@ def process_logfile(path_to_log_file: str) -> None:
         for line in file:
             cm_tup = parse_line(line)
             if cm_tup is not None:  # if the line from log file followed the format, add to queue
-                consumer.add_to_queue(*cm_tup)
+                id, data, timestamp = cm_tup
+                if timestamp is None:
+                    timestamp = time.perf_counter() - consumer.start_consume_time
+                enqueue_xbee_message(id, data, timestamp)
+                consumer.add_to_queue(id, data, timestamp)
 
 
 # Emphasize: For this function TimeStamp is NOT taken from logfile, it is system time
@@ -69,10 +125,18 @@ def process_logfile_live(path_to_log_file: str) -> None:
     with open(path_to_log_file, 'r') as file:
         for line in file:
             cm_tup = parse_line(line)
-            if cm_tup is None: # line did not match the format
+            if cm_tup is None:  # line did not match the format
                 continue
-            id, data, timestamp = cm_tup # timestamp is derived from the log statement itself and therefore not used
+            id, data, timestamp = cm_tup
+            replay_timestamp = timestamp
+            if timestamp is None:
+                timestamp = time.perf_counter() - consumer.start_consume_time
 
-            consumer.add_to_queue(id, data, time.perf_counter() - consumer.start_consume_time)
+            enqueue_xbee_message(
+                id,
+                data,
+                timestamp,
+                replay_timestamp=replay_timestamp,
+            )
+            consumer.add_to_queue(id, data, timestamp)
             time.sleep(LOOP_TIME)
-

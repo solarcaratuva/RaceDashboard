@@ -1,11 +1,13 @@
 import time
+from typing import Optional
 from serial import Serial
 import serial.tools.list_ports
 from backend.input.logfile_producer import parse_line
+from backend.sockio.stream_xbee import enqueue_xbee_message
 import backend.input.consumer as consumer
 
 
-def get_correct_port() -> str:
+def get_correct_port() -> Optional[str]:
     """ Finds the ST-Link's port"""
 
     ports = serial.tools.list_ports.comports()
@@ -35,9 +37,13 @@ def listen_to_serial():
                 text_tuple = parse_line(text)
                 if text_tuple is None:
                     continue
-                id, data, timestamp = text_tuple # timestamp is derived from the log statement itself and therefore not used
+                id, data, timestamp = text_tuple
+                if timestamp is None:
+                    # If the incoming message is radio-style, there is no embedded timestamp.
+                    timestamp = time.perf_counter() - consumer.start_consume_time
 
-                consumer.add_to_queue(id, data, time.perf_counter() - consumer.start_consume_time)
+                enqueue_xbee_message(id, data, timestamp)
+                consumer.add_to_queue(id, data, timestamp)
 
             except Exception as e:
                 print(f"Serial Read Exception: {e}")

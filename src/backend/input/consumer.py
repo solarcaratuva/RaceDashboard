@@ -1,11 +1,11 @@
-import queue
+from queue import Queue
 import time
 from backend.can_message import CanMessage, decode_message
 from backend.db_connection import DbConnection
 import backend.alert_checker as alertChecker
 
 # shared queue among all producers and this consumer, CanMessage objects
-queue = queue.Queue()
+can_queue = Queue()
 
 # Time in seconds to wait before consuming all data from the queue each loop. This is done to prevent excessive database writes
 LOOP_TIME = 0.5
@@ -25,7 +25,7 @@ def add_to_queue(id: int, data: bytes, timestamp: float) -> None:
     # perform checks immediately
     alertChecker.checkAlertsAgainstCanMsg(can_msg, data)
 
-    queue.put(can_msg)
+    can_queue.put(can_msg)
 
 
 def process_data() -> None:
@@ -38,9 +38,9 @@ def process_data() -> None:
     db_conn = DbConnection()
     list_can_messages = []
     while True:
-        if queue.empty():
+        if can_queue.empty():
             break
-        can_msg = queue.get()
+        can_msg = can_queue.get()
         list_can_messages.append(can_msg)
 
     db_conn.add_batch_can_msg(list_can_messages)
@@ -59,9 +59,9 @@ def process_data_live() -> None:
         last_consume_time = time.perf_counter()
         list_can_messages = []
         while True:
-            if queue.empty():
+            if can_queue.empty():
                 break
-            can_msg = queue.get()
+            can_msg = can_queue.get()
             list_can_messages.append(can_msg)
 
         db_conn.add_batch_can_msg(list_can_messages)

@@ -1,7 +1,7 @@
 import React from "react";
 import "./GraphsCard.css";
 
-export default function GraphsCard({ graphData }) {
+export default function GraphsCard({ graphData } : {graphData : any}) {
   return (
     <div className="card card-full">
       <h3>Interactive Graphs</h3>

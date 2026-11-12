@@ -2,7 +2,7 @@
 
 The Race Dashboard is a React and TypeScript interface for monitoring solar-car telemetry. A Python backend ingests CAN data, decodes it using the project's DBC files, stores it in SQLite, and exposes HTTP and Socket.IO interfaces for dashboard clients.
 
-The React dashboard and Python backend run as separate processes.
+The React dashboard and Python backend run as separate processes but are activated together.
 
 ## Quick Start
 
@@ -21,27 +21,27 @@ cd src/frontend/race
 npm install
 ```
 
-Start both servers in separate terminals.
+Start the Dashboard
 
-**Terminal 1: React frontend** (from `src/frontend/race`)
-
-```bash
-npm run dev
-```
-
-**Terminal 2: Python backend** (from the project root)
+**Spin-Up Backend & Frontend Simultaneously**
 
 ```bash
-python3 src/main.py <source_type> [flags]
+cd src/frontend/race
+npm start
 ```
+Click on the GUI setup link to select input data type and necessary config options.
+The site will auto redirect to the Race Dashboard. Errors print in the terminal
 
-For example:
+### Config Options
+| Source | Config Option |
+| --- | --- |
+| `pastlog` | File Path
+| `mock_livelog` | File Path
+| `livelog` | None
+| `radio` | None
+| `db` | File Path
 
-```bash
-python3 src/main.py mock_livelog --inputFile /path/to/capture.log
-```
-
-Open the URL printed by Vite, normally `http://localhost:5173`.
+File paths must be relative to repo root. Log options injest both .txt and .log files while DB takes .db files.
 
 ## Ports
 
@@ -50,18 +50,6 @@ Open the URL printed by Vite, normally `http://localhost:5173`.
 | `5173` | Vite development server and React dashboard |
 | `5500` | Flask and Flask-SocketIO backend |
 | `5499` | Legacy startup-options server when `main.py` runs without arguments |
-
-The no-argument command starts the legacy setup UI, not the React development server. Start Vite separately in all cases.
-
-## Legacy Logger UI
-
-Running `python3 src/main.py` without arguments starts the setup UI on port `5499`. It lets you choose the log type, input file, output database, and DBC branch before launching the backend on port `5500`. Required input files are `.log` or `.txt` for `pastlog` and `mock_livelog`, and `.db` for `db`.
-
-The legacy logger includes three views:
-
-- **Debug Dashboard:** View selected CAN messages and their current values.
-- **Graph View:** Plot selected CAN signals over time.
-- **Alerts Manager:** Create, delete, and review alerts. Fault signals can trigger alerts automatically.
 
 ## Technology Stack
 
@@ -89,11 +77,11 @@ src/main.py
 
 | Source | Producer | Behavior |
 | --- | --- | --- |
-| `pastlog` | `logfile_producer.py` | Parses a complete `.log` or `.txt` capture, then writes decoded messages to SQLite. |
-| `mock_livelog` | `logfile_producer.py` | Replays a capture incrementally, approximately one line every `0.01` seconds. |
-| `livelog` | `live_log_producer.py` | Reads log-formatted CAN messages from an attached ST-Link at `921600` baud. |
-| `radio` | `radio_producer.py` | Reads COBS-framed CAN messages from a radio input. |
-| `db` | `main.py` | Opens an existing SQLite database. |
+| `pastlog` | `logfile_producer.py` | Parses a complete `.log` or `.txt` capture, then writes decoded messages to Dashboard. 
+| `mock_livelog` | `logfile_producer.py` | Replays a capture incrementally using timestamps on the log file (falls back to 0.1 sec)  
+| `livelog` | `live_log_producer.py` | Reads log-formatted CAN messages from an attached ST-Link at `921600` baud.
+| `radio` | `radio_producer.py` | Reads CAN messages from an XBEE radio input.
+| `db` | `main.py` | Opens an existing SQLite database.
 
 Each producer sends a CAN ID, payload, and timestamp to `consumer.py`. The consumer decodes the frame with `can_message.py` using the loaded DBC files, checks configured alerts, and writes signal values into SQLite through `db_connection.py`. `DbConnection` provides the thread-safe database access used by ingestion and request handlers.
 
@@ -113,26 +101,6 @@ The Flask-SocketIO server in `src/backend/sockio/socket.py` is the real-time com
 | `big_popup_event` | backend -> React/client | Notify clients about alert creation or triggered faults/alerts. |
 
 The backend also provides HTTP routes for table names, latest messages, CAN message definitions, graph ranges, and alert management. Socket.IO and HTTP are both served from port `5500`.
-
-The current React card and graph components still contain sample values, and the React tree does not yet subscribe to the backend Socket.IO events. The event contract above is implemented by the Python backend and is the integration point for live dashboard data. The React dashboard's cloud mode is likewise not yet connected to a cloud event source.
-
-## Backend Commands
-
-`<source_type>` is one of `pastlog`, `mock_livelog`, `livelog`, `radio`, or `db`.
-
-```bash
-python3 src/main.py pastlog --inputFile /path/to/capture.log
-python3 src/main.py mock_livelog --inputFile /path/to/capture.log --outputDB ./CANDatabases/replay.db
-python3 src/main.py livelog
-python3 src/main.py radio
-python3 src/main.py db --inputFile ./CANDatabases/existing.db
-```
-
-Useful flags:
-
-- `-i`, `--inputFile`: capture or SQLite database path, depending on the source
-- `-o`, `--outputDB`: output database path; otherwise a timestamped database is created under `CANDatabases/`
-- `-b`, `--set_dbc_branch`: DBC submodule branch; defaults to `main`
 
 ## Frontend Checks
 
