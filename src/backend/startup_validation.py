@@ -70,7 +70,7 @@ def validate_startup_requirements(log_type: str, input_file_path: Optional[str])
             errors.append(f"Input file is required for {log_type} mode")
         elif not validate_input_file_exists(input_file_path):
             errors.append(f"Input file does not exist: {input_file_path}")
-        elif not (input_file_path.endswith(".txt") or input_file_path.endswith(".log")):
+        elif not (input_file_path.lower().endswith(".txt") or input_file_path.lower().endswith(".log")):
             errors.append(f"Input file must be .txt or .log for {log_type} mode")
     
     elif log_type == "db":
