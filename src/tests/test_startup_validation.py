@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -63,6 +65,28 @@ class RadioPortDetectionTests(unittest.TestCase):
             validate_startup_requirements("radio", None),
             ["Radio device not found. Please connect radio for radio mode."],
         )
+
+
+class FileExtensionValidationTests(unittest.TestCase):
+    def test_accepts_uppercase_log_extension(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "capture.LOG"
+            log_path.touch()
+
+            self.assertEqual(
+                validate_startup_requirements("pastlog", str(log_path)),
+                [],
+            )
+
+    def test_accepts_uppercase_db_extension(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "capture.DB"
+            db_path.touch()
+
+            self.assertEqual(
+                validate_startup_requirements("db", str(db_path)),
+                [],
+            )
 
 
 if __name__ == "__main__":

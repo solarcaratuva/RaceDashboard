@@ -137,7 +137,7 @@ def validate_startup_requirements(log_type: str, input_file_path: Optional[str])
             errors.append(f"Input file is required for {log_type} mode")
         elif not validate_input_file_exists(input_file_path):
             errors.append(f"Input file does not exist: {input_file_path}")
-        elif not (input_file_path.endswith(".txt") or input_file_path.endswith(".log")):
+        elif os.path.splitext(input_file_path)[1].lower() not in (".txt", ".log"):
             errors.append(f"Input file must be .txt or .log for {log_type} mode")
     
     elif log_type == "db":
@@ -145,7 +145,7 @@ def validate_startup_requirements(log_type: str, input_file_path: Optional[str])
             errors.append("Input file is required for db mode")
         elif not validate_input_file_exists(input_file_path):
             errors.append(f"Database file does not exist: {input_file_path}")
-        elif not input_file_path.endswith(".db"):
+        elif os.path.splitext(input_file_path)[1].lower() != ".db":
             errors.append("Input file must be .db for db mode")
     
     # Validate hardware requirements

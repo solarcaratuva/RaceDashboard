@@ -121,7 +121,7 @@ def run_server(args):
     database_path = f"./CANDatabases/can_database_{timestamp}.db"
     if args.outputDB:
         database_path = args.outputDB[0]
-    if not database_path.endswith(".db"):
+    if Path(database_path).suffix.lower() != ".db":
         print("[STARTUP] Error: Need to specify a .db file for the output database")
         sys.exit()
 
