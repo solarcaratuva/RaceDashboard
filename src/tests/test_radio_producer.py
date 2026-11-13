@@ -87,15 +87,32 @@ class CompleteRadioLineTests(unittest.TestCase):
 class RadioSerialSettingsTests(unittest.TestCase):
     @patch("backend.input.radio_producer.get_radio_port", return_value="COM4")
     @patch("backend.input.radio_producer.Serial")
-    def test_passes_parity_and_stopbits_to_serial(self, serial_mock, _port_mock):
+    def test_uses_default_radio_settings(self, serial_mock, _port_mock):
         serial_mock.return_value.in_waiting = 1
         serial_mock.return_value.read.side_effect = KeyboardInterrupt
 
-        listen_to_radio(parity="E", stopbits=2.0)
+        listen_to_radio()
 
         serial_mock.assert_called_once_with(
             "COM4",
             baudrate=9600,
+            timeout=0.1,
+            parity="N",
+            stopbits=1.0,
+        )
+        serial_mock.return_value.close.assert_called_once_with()
+
+    @patch("backend.input.radio_producer.get_radio_port", return_value="COM4")
+    @patch("backend.input.radio_producer.Serial")
+    def test_passes_radio_settings_to_serial(self, serial_mock, _port_mock):
+        serial_mock.return_value.in_waiting = 1
+        serial_mock.return_value.read.side_effect = KeyboardInterrupt
+
+        listen_to_radio(parity="E", stopbits=2.0, baudrate=19200)
+
+        serial_mock.assert_called_once_with(
+            "COM4",
+            baudrate=19200,
             timeout=0.1,
             parity="E",
             stopbits=2.0,

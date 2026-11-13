@@ -63,7 +63,7 @@ export default defineConfig([
   | `livelog` | Reads log-formatted CAN messages from an attached ST-Link serial device. No input file; the device is expected at 921600 baud. |
   | `mock_livelog` | Requires a `.log` or `.txt` capture and replays it as a live source, approximately one line every 0.01 seconds. |
   | `db` | Requires `--inputFile` pointing to an existing `.db` SQLite database. |
-  | `radio` | Reads COBS-framed CAN messages from an attached FT232R radio at 9600 baud. No input file. |
+  | `radio` | Reads COBS-framed CAN messages from an attached FT232R radio. No input file; baud rate defaults to 9600, parity to `N`, and stop bits to `1.0`. These settings can be overridden with `--baudrate`, `--parity`, and `--stopbits`. |
 
   Examples:
 
@@ -73,6 +73,7 @@ export default defineConfig([
   python main.py db --inputFile ./CANDatabases/existing.db
   python main.py livelog
   python main.py radio
+  python main.py radio --baudrate 19200 --parity E --stopbits 2
   ```
 
   `--outputDB` selects the SQLite output path for ingestion modes; if omitted, the app creates a timestamped database under `./CANDatabases/`. `db` mode uses the supplied database as its database path. `--set_dbc_branch` chooses the CAN-messages submodule branch and defaults to `main`. Files required by a mode are validated at startup, as are the serial devices for `livelog` and `radio`.
