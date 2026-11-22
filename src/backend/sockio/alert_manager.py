@@ -1,8 +1,8 @@
 from flask import render_template, request, jsonify
-import backend.alert_checker as alertChecker
-from backend.db_connection import DbConnection
-import backend.dbcs as dbcs
-from backend.sockio.socket import socketio, app
+from .. import alert_checker as alertChecker
+from ..db_connection import DbConnection
+from .. import dbcs
+from .socket import socketio, app
 
 
 # List to store messages to display on the front end

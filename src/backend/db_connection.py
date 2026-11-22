@@ -1,6 +1,6 @@
 import sqlite3
-import backend.dbcs as dbcs
-from backend.can_message import CanMessage  # our own CanMessage Object
+from . import dbcs
+from .can_message import CanMessage  # our own CanMessage Object
 import json
 
 # Before initializing any DbConnection objects, must run setup_the_db_path(path : str)
@@ -154,9 +154,17 @@ class DbConnection:
 
         # create table for each can_message_name
         for can_msg_type, signal_types_dict in can_msg_signals.items():
-            columns = ', '.join([f'{signal_name} INTEGER' for signal_name in signal_types_dict.keys()])
+            columns = ', '.join(
+                f'{signal_name} "{signal_type}"'
+                for signal_name, signal_type in signal_types_dict.items()
+            )
 
-            sql = f'CREATE TABLE IF NOT EXISTS {can_msg_type} (count INTEGER PRIMARY KEY AUTOINCREMENT, {columns}, timeStamp INTEGER)'  # add timestamp column
+            sql = (
+                f'CREATE TABLE IF NOT EXISTS {can_msg_type} ('
+                'count "INTEGER" PRIMARY KEY AUTOINCREMENT'
+                f'{f", {columns}" if columns else ""}, '
+                'timeStamp "INTEGER")'
+            )
 
             self.cur.execute(sql)
 
@@ -191,6 +199,8 @@ class DbConnection:
 
         self.conn.commit()
         new_id = self.cur.lastrowid
+        if new_id is None:
+            raise RuntimeError('SQLite did not provide a row ID')
         return new_id
     
     
@@ -238,15 +248,12 @@ class DbConnection:
 
         self.conn.commit()
         new_id = self.cur.lastrowid
-
-        import backend.alert_checker as alert_checker
-        alert_checker.invalidate_alerts_cache()
-
+        if new_id is None:
+            raise RuntimeError
         return new_id
 
     
-    def delete_alert(self, alert_id: int) -> None:
-        self.__ensure_connection()
+    def delete_alert(self, alert_id: int) -> str | None:
         self.cur.execute('''
             DELETE FROM Alerts WHERE id = ?
         ''', (alert_id,))
@@ -256,8 +263,7 @@ class DbConnection:
         alert_checker.invalidate_alerts_cache()
 
 
-    def get_alert_name(self, alert_id: int) -> str:
-        self.__ensure_connection()
+    def get_alert_name(self, alert_id: int) -> str | None:
         self.cur.execute('''
             SELECT name FROM Alerts WHERE id = ?
         ''', (alert_id,))

@@ -11,9 +11,12 @@ venv
 *.sqlite-journal
 *.txt
 !requirements.txt
+!resources/log-files/*.txt
 TODO
 !example.txt
 .vscode
 CANDatabases/
-*/node_modules
+*/node_modules/*
+**/node_modules/**
+***/node_modules/***
 temp_upload/

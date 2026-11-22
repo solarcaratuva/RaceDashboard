@@ -1,10 +1,12 @@
-from backend.db_connection import DbConnection
-from backend.can_message import CanMessage
-from backend.sockio.socket import socketio
-from backend.dbcs import get_fault_signals
+from .db_connection import DbConnection
+from .can_message import CanMessage
+from .sockio import socket as socket_module
+from .dbcs import get_fault_signals
 from datetime import datetime
 import json
 import threading
+
+socketio = getattr(socket_module, "socketio")
 
 
 alerts = None

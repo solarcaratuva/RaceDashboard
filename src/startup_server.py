@@ -15,6 +15,7 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
     
     BASE_DIR = Path(__file__).resolve().parent 
     FRONTEND_DIR = (BASE_DIR / "frontend").resolve()
+    # Ensure these paths match your folder structure exactly
     HTML_DIR = (FRONTEND_DIR / "logger" / "html").resolve()
     STATIC_DIR = (FRONTEND_DIR / "logger" / "static").resolve()
     
@@ -23,7 +24,8 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
     @setup_app.route("/validate-hardware", methods=["POST"])
     def validate_hardware():
         """AJAX endpoint for real-time hardware validation"""
-        log_type = request.json.get("logType")
+        request_data = request.get_json(silent=True) or {}
+        log_type = request_data.get("logType")
         
         if log_type == "livelog":
             from backend.startup_validation import get_st_link_port
@@ -45,8 +47,10 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
     @setup_app.route("/validate-file", methods=["POST"])
     def validate_file():
         """AJAX endpoint for validating selected file name (pre-upload)."""
-        file_name = request.json.get("fileName", "")
-        log_type = request.json.get("logType")
+        request_file = request.get_json(silent=True) or {}
+        file_name = request_file.get("fileName", "")
+        request_log_type = request.get_json(silent=True) or {}
+        log_type = request_log_type.get("logType")
         file_name = file_name.strip().lower()
 
         if not file_name:
@@ -59,22 +63,37 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
             if not file_name.endswith('.db'):
                 return jsonify({"valid": False, "message": "Database file must end with .db"})
 
-        # For other modes, any extension is acceptable or file not required
         return jsonify({"valid": True, "message": ""})
 
     @setup_app.route("/", methods=["GET"])
     def index():
-        # Initialize submodule and get available branches
-        
         initialize_submodule()
         branches = get_submodule_branches()
         
-        # Read the HTML file and inject branches
         html_path = HTML_DIR / "startup_options.html"
         with open(html_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
         
-        # Generate radio buttons for branches
+        # 1. ADD CLOUD TO LOG TYPE (Injecting it into the HTML via regex)
+        # This adds the "cloud" option to the list of radio buttons
+        cloud_option = '''
+        <div class="radio-option">
+            <input type="radio" name="logType" id="cloud" value="cloud">
+            <label for="cloud">cloud</label>
+        </div>'''
+        html_content = html_content.replace('<label for="radio">radio</label>', '<label for="radio">radio</label>\n' + cloud_option)
+
+        # 2. ADD AWS PROFILE INPUT BOX
+        # This adds a field so users can type their username/profile
+        aws_profile_field = '''
+        <fieldset id="aws-profile-section">
+            <legend>AWS Configuration</legend>
+            <input type="text" name="aws_profile" id="aws_profile" placeholder="Enter AWS Profile Name (e.g. muhammadhussain)">
+        </fieldset>'''
+        # Insert it right before the Launch button
+        html_content = html_content.replace('<button type="submit"', aws_profile_field + '\n<button type="submit"')
+
+        # Handle DBC branches
         branch_options = ""
         for i, branch in enumerate(branches):
             checked = 'checked' if branch == 'main' else ''
@@ -84,7 +103,6 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
                 <label for="{branch}">{branch}</label>
             </div>'''
         
-        # Replace the hardcoded DBC branch section
         dbc_section = f'''
     <fieldset>
         <legend>DBC Branch</legend>
@@ -92,90 +110,62 @@ def launch_startup_options(run_server_callback, socketio_port=5500):
         </div>
     </fieldset>'''
         
-        # Find and replace the DBC branch fieldset
         pattern = r'<fieldset>\s*<legend>DBC Branch</legend>.*?</fieldset>'
         html_content = re.sub(pattern, dbc_section, html_content, flags=re.DOTALL)
         
         return html_content
     
-    @setup_app.route("/static/<path:filename>")
-    def static_files(filename):
-        return send_from_directory(STATIC_DIR, filename)
-
-    def _shutdown(flask_request):
-        func = flask_request.environ.get("werkzeug.server.shutdown")
-        if func:
-            func()
-
     @setup_app.route("/start", methods=["POST"])
     def start():
-        # Gather form inputs into an argparse-like Namespace
-        class Opts: pass
+        class Opts:
+            logType: str
+            aws_profile: list
+            inputFile: list | None
+            outputDB: list | None
+            set_dbc_branch: str
 
-        # Create opts object to match the structure that argparse would provide for CLI usage
         opts = Opts()
-        opts.logType = request.form.get("logType")
+        opts.logType = request.form.get("logType") or ""
 
-        # Handle uploaded file (file chooser). For required modes we expect a file upload.
+        # 3. CAPTURE AWS PROFILE
+        # We wrap it in a list to match the argparse -p flag format
+        profile = request.form.get("aws_profile", "default").strip()
+        opts.aws_profile = [profile] if profile else ["default"]
 
-        # temp_upload folder is created because browsers can't store direct paths to file
-        # so we just keep 1 file named "user_uploaded_file" which gets overwritten each run
+        # Handle file upload
         uploaded_file = request.files.get("inputFile")
         saved_path = None
         if uploaded_file and uploaded_file.filename:
-            # Ensure uploads directory exists
             uploads_dir = Path("temp_upload")
             uploads_dir.mkdir(exist_ok=True)
-
-            # Clear out any existing files so we truly only ever have one
             for f in uploads_dir.iterdir():
-                if f.is_file():
-                    f.unlink()
+                if f.is_file(): f.unlink()
 
-            # Always use the same name, optionally preserving extension
             ext = Path(uploaded_file.filename).suffix  
             safe_name = f"user_uploaded_file{ext}" if ext else "user_uploaded_file"
-
             saved_path = str(os.path.join(uploads_dir, safe_name))
             uploaded_file.save(saved_path)
 
-        # For downstream code expecting list with path
         opts.inputFile = [saved_path] if saved_path else None
-
         outputDB = request.form.get("outputDB") or ""
         opts.outputDB = [outputDB] if outputDB.strip() else None
         opts.set_dbc_branch = request.form.get("set_dbc_branch") or "main"
 
-        # Server-side validation as safety net
-        input_file_path = saved_path if saved_path else None
-        validation_errors = validate_startup_requirements(opts.logType, input_file_path)
-        # Additional check: required modes must have uploaded file
-        required_modes = ["pastlog","mock_livelog","db"]
-        if opts.logType in required_modes and not input_file_path:
-            validation_errors.append(f"Input file is required for {opts.logType} mode")
-        
-        if validation_errors:
-            print("Error in startup", validation_errors)
-            
-            # Return simple JSON error
-            return jsonify({
-                "success": False,
-                "errors": validation_errors
-            }), 400
-        
-
-        # Capture the shutdown function within the request context
-        shutdown_func = request.environ.get("werkzeug.server.shutdown")
-
-        # Launch the real server in a new thread
+        # Launch server in background
         t = threading.Thread(target=lambda: run_server_callback(opts))
         t.start()
 
-        # Close the setup server and redirect to the real app
+        # Shutdown setup server and redirect
+        shutdown_func = request.environ.get("werkzeug.server.shutdown")
         if shutdown_func:
-            threading.Timer(0.25, shutdown_func).start()
+            threading.Timer(0.5, shutdown_func).start()
+            
         return redirect(f"http://localhost:{socketio_port}", code=302)
 
-    # Open browser to setup UI and run the startup options server 
-    webbrowser.open(f"http://localhost:{SETUP_PORT}")
+    print(f"\n>>> Setup Wizard available at http://localhost:{SETUP_PORT}")
+    try:
+        webbrowser.open(f"http://localhost:{SETUP_PORT}")
+    except:
+        pass
     setup_app.run(host="127.0.0.1", port=SETUP_PORT, debug=False)
+    
