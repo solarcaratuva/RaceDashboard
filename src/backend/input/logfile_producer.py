@@ -17,7 +17,7 @@ LOOP_TIME = 0.01
 # Group 4: (0x[0-9A-Fa-f]+)    - CAN message hex ID after "ID " (e.g. "0x406")
 #          Length \d+            - Matches "Length" and its digit(s), not captured (e.g. "Length 6")
 # Group 5: (0x[0-9A-Fa-f]+)    - Raw hex data bytes after "Data " (e.g. "0xa41f770200c0")
-solarPattern = re.compile(r'(\d{2}):(\d{2}):(\d{2}) .+ ID (0x[0-9A-Fa-f]+) Length \d+ Data (0x[0-9A-Fa-f]+)')
+solarPattern = re.compile(r'(\d{2}):(\d{2}):(\d{2}) .+ ID (0x[0-9A-Fa-f]+|\d+) Length \d+ Data (0x[0-9A-Fa-f]+)')
 
 # These global vars are required for the non-live log-file processing
 msIncrementer = 0
@@ -67,9 +67,8 @@ def parse_line(log_line: str):
         id_hex = match.group(4)
         data_hex = match.group(5).replace("0x", "")
 
-        id_int = int(id_hex, 16)
+        id_int = int(id_hex, 0)
         data_bytes = bytes.fromhex(data_hex)
-
         total_seconds = hours * 3600 + minutes * 60 + seconds
         if secondsPrevious == total_seconds:
             msIncrementer += 1
