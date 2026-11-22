@@ -60,7 +60,7 @@ def _take_complete_radio_lines(buffer: bytearray) -> list[bytes]:
         return lines
 
 
-def listen_to_radio(parity: str = "N", stopbits: float = 1.0):
+def listen_to_radio(parity: str = "N", stopbits: float = 1.0, baudrate: int = 9600):
     """ Listens to the radio for CAN messages and adds them to the queue. Runs forever"""
 
     print("Will attempt to get port", flush=True)
@@ -79,7 +79,7 @@ def listen_to_radio(parity: str = "N", stopbits: float = 1.0):
         print(f"This is the port {port}", flush=True)
 
     try:
-        ser = Serial(port, baudrate=9600, timeout=0.1, parity=parity, stopbits=stopbits)
+        ser = Serial(port, baudrate=baudrate, timeout=0.1, parity=parity, stopbits=stopbits)
         print(f"Serial connection to {port} established. Listening...", flush=True)
         pending_line = bytearray()
         next_wait_log = time.monotonic() + 5

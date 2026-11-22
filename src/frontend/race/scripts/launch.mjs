@@ -14,6 +14,8 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
+import os from "node:os";
+import { pipeline } from "node:stream/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RACE_DIR = path.resolve(__dirname, ".."); // src/frontend/race
@@ -39,8 +41,11 @@ const state = {
 // references to the flask-python server and vite-ts servers respectively
 let backendProc = null;
 let frontendProc = null;
+// Keep uploaded inputs until the backend exits; it may still be reading them after launch.
+const uploadedFileDirs = new Set();
 
 function findPython() {
+  // Prefer python3, but retain compatibility with systems where only "python" is installed.
   for (const cmd of ["python3", "python"]) {
     const res = spawnSync(cmd, ["--version"]);
     if (!res.error && res.status === 0) return cmd;
@@ -48,31 +53,44 @@ function findPython() {
   return null;
 }
 
-function validate({ logType, inputFile, outputDB, parity = "N", stopbits = "1" }) {
+function validate({ logType, inputFile, outputDB, parity, stopbits, baudrate }) {
   const errors = [];
   if (!LOG_TYPES.includes(logType)) {
     errors.push(`Unknown log type: ${logType}`);
     return errors; // nothing else worth checking
   }
-  if (logType === "radio" && !["N", "E", "O", "M", "S"].includes(parity)) {
-    errors.push("Parity must be N, E, O, M, or S for radio mode");
+  if (logType === "radio") {
+    const parityValue = parity == null
+      ? ""
+      : (typeof parity === "string" ? parity : String(parity)).trim().toUpperCase();
+    const stopbitsValue = String(stopbits ?? "").trim();
+    const baudrateValue = String(baudrate ?? "").trim();
+    if (parityValue && !["N", "E", "O", "M", "S"].includes(parityValue)) {
+      errors.push("Parity must be N, E, O, M, or S for radio mode");
+    }
+    if (stopbitsValue && !["1", "1.0", "1.5", "2"].includes(stopbitsValue)) {
+      errors.push("Stop bits must be 1, 1.5, or 2 for radio mode");
+    }
+    if (baudrateValue && (
+      !/^\d+$/.test(baudrateValue) || !Number.isSafeInteger(Number(baudrateValue)) || Number(baudrateValue) <= 0
+    )) {
+      errors.push("Baud rate must be a positive whole number for radio mode");
+    }
   }
-  if (logType === "radio" && !["1", "1.5", "2"].includes(String(stopbits))) {
-    errors.push("Stop bits must be 1, 1.5, or 2 for radio mode");
-  }
+  // Normalize suffixes before checking so uppercase extensions behave like lowercase ones.
   if (FILE_REQUIRED_TYPES.includes(logType)) {
     if (!inputFile || !inputFile.trim()) {
       errors.push(`Input file is required for ${logType} mode`);
-    } else if (logType === "db" && !inputFile.trim().endsWith(".db")) {
+    } else if (logType === "db" && path.extname(inputFile.trim()).toLowerCase() !== ".db") {
       errors.push("Input file must be .db for db mode");
     } else if (
       logType !== "db" &&
-      !(inputFile.trim().toLowerCase().endsWith(".log") || inputFile.trim().toLowerCase().endsWith(".txt"))
+      ![".log", ".txt"].includes(path.extname(inputFile.trim()).toLowerCase())
     ) {
       errors.push(`Input file must be .log or .txt for ${logType} mode`);
     }
   }
-  if (outputDB && outputDB.trim() && !outputDB.trim().endsWith(".db")) {
+  if (outputDB && outputDB.trim() && path.extname(outputDB.trim()).toLowerCase() !== ".db") {
     errors.push("Output DB must be a .db file");
   }
   return errors;
@@ -94,7 +112,7 @@ function prefixLog(prefix) {
   };
 }
 
-function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stopbits = "1" }) {
+function launchApp({ logType, inputFile, outputDB, dbcBranch, parity, stopbits, baudrate }) {
   const python = findPython();
   if (!python) {
     state.error = "Could not find python3 or python on PATH.";
@@ -103,10 +121,18 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stop
   }
 
   const args = [path.join("src", "main.py"), logType];
+  // Uploads and manually entered paths both reach main.py through the same CLI option.
   if (inputFile && inputFile.trim()) args.push("--inputFile", inputFile.trim());
   if (outputDB && outputDB.trim()) args.push("--outputDB", outputDB.trim());
   if (dbcBranch && dbcBranch.trim()) args.push("--set_dbc_branch", dbcBranch.trim());
-  if (logType === "radio") args.push("--parity", parity, "--stopbits", stopbits);
+  if (logType === "radio") {
+    const parityValue = typeof parity === "string" ? parity.trim().toUpperCase() : "";
+    const stopbitsValue = String(stopbits ?? "").trim();
+    const baudrateValue = String(baudrate ?? "").trim();
+    if (parityValue) args.push("--parity", parityValue);
+    if (stopbitsValue) args.push("--stopbits", stopbitsValue);
+    if (baudrateValue) args.push("--baudrate", baudrateValue);
+  }
 
   console.log(`\n[launcher] Starting backend: ${python} ${args.join(" ")}`);
   backendProc = spawn(python, args, { cwd: REPO_ROOT });
@@ -118,6 +144,7 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stop
       state.launching = false;
     }
     console.log(`[launcher] Backend process exited (code ${code})`);
+    cleanupUploadedFiles();
   });
   state.backendStarted = true;
 
@@ -146,6 +173,14 @@ function launchApp({ logType, inputFile, outputDB, dbcBranch, parity = "N", stop
     }
     console.log(`[launcher] Frontend process exited (code ${code})`);
   });
+}
+
+function cleanupUploadedFiles() {
+  // Remove only per-upload directories created by this launcher instance.
+  for (const dir of uploadedFileDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  uploadedFileDirs.clear();
 }
 
 function openBrowser(url) {
@@ -236,25 +271,20 @@ const PAGE = `<!doctype html>
     <div class="field" id="inputFileField">
       <label for="inputFile" id="inputFileLabel">Input file path</label>
       <input id="inputFile" name="inputFile" type="text" placeholder="/path/to/capture.log" />
+      <label for="filePicker">Or choose a file from your computer</label>
+      <input id="filePicker" type="file" accept=".log,.txt,.db,.LOG,.TXT,.DB" />
       <div class="hint" id="inputFileHint">Path is relative to repo root. Input a .log or .txt file</div>
-    </div>
+      </div>
 
     <div class="field" id="radioSerialField">
-      <label for="parity">Parity bits</label>
-      <select id="parity" name="parity">
-        <option value="N" selected>None</option>
-        <option value="E">Even</option>
-        <option value="O">Odd</option>
-        <option value="M">Mark</option>
-        <option value="S">Space</option>
-      </select>
+      <label for="parity">Parity</label>
+      <input id="parity" name="parity" type="text" placeholder="Leave blank for default: N" />
 
       <label for="stopbits">Stop bits</label>
-      <select id="stopbits" name="stopbits">
-        <option value="1" selected>1</option>
-        <option value="1.5">1.5</option>
-        <option value="2">2</option>
-      </select>
+      <input id="stopbits" name="stopbits" type="text" placeholder="Leave blank for default: 1.0" />
+
+      <label for="baudrate">Baud rate</label>
+      <input id="baudrate" name="baudrate" type="number" min="1" step="1" placeholder="Leave blank for default: 9600" />
     </div>
 
     <label for="outputDB">Output database (optional)</label>
@@ -274,6 +304,7 @@ const PAGE = `<!doctype html>
   const inputFileField = document.getElementById("inputFileField");
   const inputFileHint = document.getElementById("inputFileHint");
   const inputFileEl = document.getElementById("inputFile");
+  const filePickerEl = document.getElementById("filePicker");
   const radioSerialField = document.getElementById("radioSerialField");
   const parityEl = document.getElementById("parity");
   const stopbitsEl = document.getElementById("stopbits");
@@ -285,6 +316,7 @@ const PAGE = `<!doctype html>
   const presetEl = document.getElementById("presetFile");
   const inputFileLabel = document.getElementById("inputFileLabel");
 
+  // Populate the preset dropdown from files discovered by the local launcher.
   async function loadPresets() {
     try {
       const res = await fetch("/log-files");
@@ -300,15 +332,17 @@ const PAGE = `<!doctype html>
     }
   }
 
+  // Keep file controls and required-field validation in sync with the selected data source.
   function syncFields() {
     const needsFile = FILE_REQUIRED.includes(logTypeEl.value);
     const allowsPreset = logTypeEl.value === "pastlog" || logTypeEl.value === "mock_livelog";
     inputFileField.classList.toggle("visible", needsFile);
     presetField.classList.toggle("visible", allowsPreset);
+    radioSerialField.classList.toggle("visible", logTypeEl.value === "radio");
     if (!allowsPreset) {
       presetEl.value = "";
     }
-    inputFileEl.required = needsFile && !presetEl.value;
+    inputFileEl.required = needsFile && !presetEl.value && !filePickerEl.files.length;
     inputFileLabel.textContent = allowsPreset
       ? "Or enter your own file path"
       : "Input file path";
@@ -317,16 +351,58 @@ const PAGE = `<!doctype html>
       : "Path is relative to repo root. Input a .log or .txt file";
   }
   logTypeEl.addEventListener("change", syncFields);
-  presetEl.addEventListener("change", syncFields);
+  presetEl.addEventListener("change", () => {
+    // A user-selected preset takes precedence over a previously selected local file.
+    if (presetEl.value) filePickerEl.value = "";
+    syncFields();
+  });
+  inputFileEl.addEventListener("input", () => {
+    // Avoid sending two competing input choices with the form.
+    filePickerEl.value = "";
+  });
+  filePickerEl.addEventListener("change", () => {
+    if (filePickerEl.files.length) {
+      inputFileEl.value = "";
+      presetEl.value = "";
+    }
+    syncFields();
+  });
   syncFields();
   loadPresets();
 
+  // Upload a browser-selected file first, then submit its temporary path with the launch options.
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     errorsEl.textContent = "";
     let inputFile = inputFileEl.value.trim();
     if (!inputFile && presetEl.value) {
       inputFile = "resources/log-files/" + presetEl.value;
+    }
+    const selectedFile = filePickerEl.files[0];
+    if (selectedFile) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Uploading file…";
+      try {
+        // Browsers do not expose the selected file's local path, so send its bytes to the launcher.
+        const uploadRes = await fetch("/upload?name=" + encodeURIComponent(selectedFile.name), {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: selectedFile,
+        });
+        const uploadData = await uploadRes.json();
+        if (!uploadRes.ok) {
+          errorsEl.textContent = uploadData.error || "Could not upload the selected file.";
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Launch dashboard";
+          return;
+        }
+        inputFile = uploadData.filePath;
+      } catch (err) {
+        errorsEl.textContent = "Could not upload the selected file: " + err;
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Launch dashboard";
+        return;
+      }
     }
     const payload = {
       logType: logTypeEl.value,
@@ -335,6 +411,7 @@ const PAGE = `<!doctype html>
       dbcBranch: document.getElementById("dbcBranch").value,
       parity: parityEl.value,
       stopbits: stopbitsEl.value,
+      baudrate: document.getElementById("baudrate").value,
     };
     submitBtn.disabled = true;
     submitBtn.textContent = "Launching…";
@@ -361,6 +438,7 @@ const PAGE = `<!doctype html>
     }
   });
 
+  // The setup page stays open while child processes start, then redirects to Vite when ready.
   async function poll() {
     try {
       const res = await fetch("/status");
@@ -391,6 +469,7 @@ const PAGE = `<!doctype html>
 </html>`;
 
 const setupServer = http.createServer((req, res) => {
+  // Serve the self-contained setup page and the small JSON endpoints it uses.
   if (req.method === "GET" && req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(PAGE);
@@ -404,17 +483,56 @@ const setupServer = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/log-files") {
+    // Sample presets are limited to supported log formats; compare extensions without case sensitivity.
     let files = [];
     try {
-      files = fs.readdirSync(LOG_FILES_DIR).filter((name) => {
-        const lower = name.toLowerCase();
-        return lower.endsWith(".log") || lower.endsWith(".txt");
-      }).sort();
+      files = fs.readdirSync(LOG_FILES_DIR)
+        .filter((name) => [".log", ".txt"].includes(path.extname(name).toLowerCase()))
+        .sort();
     } catch {
       // Non-fatal: shows empty dropdown if no log files exist under log-files folder
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(files));
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/upload?")) {
+    const url = new URL(req.url, "http://localhost");
+    const name = url.searchParams.get("name") || "";
+    // Use only the normalized extension in the temporary filename, never the client-supplied name.
+    const extension = path.extname(name).toLowerCase();
+    if (![".log", ".txt", ".db"].includes(extension)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Selected file must be .log, .txt, or .db." }));
+      req.resume();
+      return;
+    }
+
+    (async () => {
+      let uploadDir;
+      try {
+        // Store uploads outside the repository and give each one an isolated directory.
+        uploadDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "race-dashboard-"));
+        uploadedFileDirs.add(uploadDir);
+        const filePath = path.join(uploadDir, `input${extension}`);
+        // Stream the request body to disk so large captures don't need to be buffered in memory.
+        await pipeline(req, fs.createWriteStream(filePath, { flags: "wx" }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ filePath }));
+      } catch (error) {
+        // Do not leave a partial upload behind if creating or writing the temp file fails.
+        if (uploadDir) {
+          fs.rmSync(uploadDir, { recursive: true, force: true });
+          uploadedFileDirs.delete(uploadDir);
+        }
+        console.error("[launcher] Failed to save uploaded file:", error);
+        if (!res.headersSent && !res.destroyed) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Could not save the selected file." }));
+        }
+      }
+    })();
     return;
   }
 
@@ -441,6 +559,7 @@ const setupServer = http.createServer((req, res) => {
         res.end(JSON.stringify({ errors }));
         return;
       }
+      // Report acceptance before spawning processes; the page polls /status for startup results.
       state.launching = true;
       state.error = null;
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -466,6 +585,8 @@ function shutdown() {
   if (backendProc) backendProc.kill("SIGTERM");
   if (frontendProc) frontendProc.kill("SIGTERM");
   setupServer.close();
+  // SIGTERM may not trigger the backend exit handler, so clean uploads explicitly here too.
+  cleanupUploadedFiles();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Radio serial parity: N (none), E (even), O (odd), M (mark), or S (space).")
     parser.add_argument("--stopbits", type=float, choices=[1.0, 1.5, 2.0], default=1.0,
                         help="Radio serial stop bits: 1, 1.5, or 2.")
+    parser.add_argument("--baudrate", type=int, default=9600,
+                        help="Radio serial baud rate (default: 9600).")
     parser.add_argument("--aws_profile", "-p", type=str, nargs=1, default=None, help="AWS username"
     "with access to Telemetry Database")
 
@@ -121,7 +123,7 @@ def run_server(args):
     database_path = f"./CANDatabases/can_database_{timestamp}.db"
     if args.outputDB:
         database_path = args.outputDB[0]
-    if not database_path.endswith(".db"):
+    if Path(database_path).suffix.lower() != ".db":
         print("[STARTUP] Error: Need to specify a .db file for the output database")
         sys.exit()
 
@@ -154,6 +156,7 @@ def run_server(args):
             target=radio_producer.listen_to_radio,
             parity=args.parity,
             stopbits=args.stopbits,
+            baudrate=args.baudrate,
         )
         print("made it out the trenches")
 
