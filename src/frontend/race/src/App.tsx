@@ -1,11 +1,10 @@
-import './App.css'
-import DashboardWrapper from './dashboard'
+import Dashboard from "./components/DashboardCard/Dashboard"
 
 function App() {
   return (
-    <>
-      <DashboardWrapper />
-    </>
+    <div className="min-h-screen bg-[#0A0D14] text-slate-100">
+      <Dashboard />
+    </div>
   )
 }
 
