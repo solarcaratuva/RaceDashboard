@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, redirect
+from flask import Flask, render_template, jsonify, redirect, request
 from flask_socketio import SocketIO
 
 # disables excessive debug logging from SocketIO
@@ -23,6 +23,10 @@ def logger_index():
 @socketio.on('connect')
 def handle_connect():
     print("Client connected.")
+    from backend.sockio.can_stream import get_latest_can_frames
+
+    for frame in get_latest_can_frames():
+        socketio.emit("can_frame", frame, to=request.sid)
 
 
 @socketio.on('disconnect')

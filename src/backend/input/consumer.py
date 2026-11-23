@@ -3,6 +3,7 @@ import time
 from backend.can_message import CanMessage, decode_message
 from backend.db_connection import DbConnection
 import backend.alert_checker as alertChecker
+from backend.sockio.can_stream import publish_can_frame
 
 # shared queue among all producers and this consumer, CanMessage objects
 queue = queue.Queue()
@@ -21,6 +22,8 @@ def add_to_queue(id: int, data: bytes, timestamp: float) -> None:
     can_msg = decode_message(id, data, timestamp)
     if can_msg is None:
         return  # invalid message, do not add to queue
+
+    publish_can_frame(can_msg, id, data)
 
     # perform checks immediately
     alertChecker.checkAlertsAgainstCanMsg(can_msg, data)
